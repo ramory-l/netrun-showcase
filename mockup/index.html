@@ -1,0 +1,1791 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Прогулка по заходу — черновик-макет</title>
+<style>
+  :root { --cyan: #46f0ff; --ink: #e8ecef; --dim: #98a1a9; --panel: rgba(6, 8, 10, .66); }
+  html, body { margin: 0; height: 100%; background: #07080a; overflow: hidden; }
+  body { font: 13px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; color: var(--ink); }
+  canvas#c { display: block; width: 100vw; height: 100vh; }
+  #cross { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; background: rgba(255,255,255,.6); pointer-events: none; }
+  #label { position: fixed; z-index: 10; top: 10px; right: 12px; padding: 4px 8px; background: rgba(0,0,0,.6); border: 1px solid rgba(255,210,122,.45); color: #ffd27a; font-size: 12px; pointer-events: none; }
+  #help { position: fixed; left: 12px; bottom: 12px; max-width: min(440px, calc(100vw - 40px)); padding: 8px 11px; font-size: 12px; background: var(--panel); border-left: 2px solid var(--cyan); pointer-events: none; }
+  #help b { color: #fff; font-weight: 600; }
+  #help .k { color: var(--cyan); }
+  #help .hl { color: var(--cyan); }
+  #help.hidden { display: none; }
+  #caption { position: fixed; left: 16px; right: 16px; top: 16%; text-align: center; pointer-events: none; opacity: 0; transition: opacity .9s; text-shadow: 0 2px 10px #000, 0 0 2px #000; }
+  #caption.show { opacity: 1; }
+  #caption .t { font-size: 30px; letter-spacing: .14em; color: #fff; }
+  #caption .s { font-size: 14px; color: #d3dade; margin-top: 4px; }
+  #toast { position: fixed; left: 50%; bottom: 13%; transform: translateX(-50%); padding: 6px 12px; background: var(--panel); opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap; max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis; }
+  #toast.show { opacity: 1; }
+  #overlay { position: fixed; z-index: 5; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: rgba(4,5,7,.74); cursor: pointer; padding: 16px; }
+  #overlay h1 { font-size: 30px; margin: 0 0 12px; letter-spacing: .08em; font-weight: 600; }
+  #overlay p { margin: 4px 0; max-width: 580px; color: #c9d0d6; }
+  #overlay .go { margin-top: 20px; color: var(--cyan); font-size: 17px; }
+  #overlay .small { color: var(--dim); font-size: 12px; margin-top: 10px; }
+  #overlay.hidden { display: none; }
+  #overlay .exit { margin-top: 22px; padding: 8px 14px; color: var(--ink); border: 1px solid rgba(70,240,255,.5); text-decoration: none; font-size: 14px; }
+  #overlay .exit:hover { background: rgba(70,240,255,.12); }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="cross"></div>
+<div id="label">Черновик-макет, не финальная графика</div>
+<div id="help">
+  <b>Прогулка по заходу</b>
+  <div><span class="k">WASD</span> — идти · <span class="k">мышь</span> — смотреть · <span class="k">Shift</span> — бег · <span class="k">Пробел</span> — прыжок</div>
+  <div><span class="hl">Голубым</span> подсвечено то, за что можно схватиться: прыгайте на ящики и крыши гаражей</div>
+  <div><span class="k">T</span> — тревога: <span id="st-alarm">спокойно</span></div>
+  <div><span class="k">1 2 3</span> — стадия NetBox: <span id="st-stage">1</span></div>
+  <div><span class="k">P</span> — PS1-эффекты: <span id="st-ps1">вкл</span> · <span class="k">H</span> — скрыть подсказки</div>
+  <div><span class="k">Esc</span> — пауза и выход на страницу</div>
+</div>
+<div id="caption"><div class="t"></div><div class="s"></div></div>
+<div id="toast"></div>
+<div id="overlay">
+  <h1>Прогулка по заходу</h1>
+  <p>Макет арт-направления кооперативного хоррора про хакеров: база NetBox внутри системы → КПП закрытого города → двор панелек → подъезд.</p>
+  <p class="go" id="go">Загрузка…</p>
+  <p class="small">Нужны мышь и клавиатура · Esc — пауза и выход</p>
+  <a class="exit" id="exit" href="../">← Вернуться на страницу</a>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+THREE.ColorManagement.enabled = false;
+
+// ------------------------------------------------------------------ params & DOM
+const Q = new URLSearchParams(location.search);
+const VIEW = Q.get('view');
+const ALARM_Q = Q.get('alarm');
+const HUD_OFF = Q.get('hud') === '0';
+const PS1_Q = Q.get('ps1');
+const $ = (id) => document.getElementById(id);
+const canvas = $('c'), overlay = $('overlay'), help = $('help'), caption = $('caption'), toast = $('toast');
+
+// ------------------------------------------------------------------ renderer + PS1 composite
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+const LOW_H = 240;
+const rt = new THREE.WebGLRenderTarget(426, LOW_H, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true });
+rt.texture.generateMipmaps = false;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(72, 16 / 9, 0.05, 900);
+camera.rotation.order = 'YXZ';
+
+// Low-res frame -> nearest upscale, vignette, ordered 4x4 Bayer dither, colour quantisation.
+const postMat = new THREE.ShaderMaterial({
+  uniforms: { tScene: { value: rt.texture }, uRes: { value: new THREE.Vector2(426, LOW_H) }, uLevels: { value: 28 } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tScene; uniform vec2 uRes; uniform float uLevels;
+    varying vec2 vUv;
+    const float B4[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    void main() {
+      vec2 px = floor(vUv * uRes);
+      vec3 c = texture2D(tScene, (px + 0.5) / uRes).rgb;
+      vec2 q = vUv - 0.5;
+      c *= 1.0 - dot(q, q) * 0.6;
+      int i = int(mod(px.y, 4.0)) * 4 + int(mod(px.x, 4.0));
+      float d = (B4[i] + 0.5) / 16.0;
+      c = floor(c * uLevels + d) / uLevels;
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+  depthTest: false, depthWrite: false,
+});
+const postScene = new THREE.Scene();
+const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const postQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat);
+postQuad.frustumCulled = false;
+postScene.add(postQuad);
+
+// ------------------------------------------------------------------ shared uniforms & PS1 world shader
+const NL = 16;
+const Z_OUT = 1, Z_NB = 2, Z_ST = 4; // light zones: outdoor, NetBox interior, stairwell interior
+const shared = {
+  uTime: { value: 0 },
+  uPS1: { value: 1 },
+  uSnap: { value: new THREE.Vector2(170, 96) },
+  uFogColor: { value: new THREE.Color(0.29, 0.31, 0.36) },
+  uFogDensity: { value: 0.018 },
+  uAmbSky: { value: new THREE.Color(0.34, 0.36, 0.42) },
+  uAmbGround: { value: new THREE.Color(0.12, 0.12, 0.13) },
+  uLP: { value: Array.from({ length: NL }, () => new THREE.Vector4(0, -999, 0, 1)) },
+  uLC: { value: Array.from({ length: NL }, () => new THREE.Vector4(0, 0, 0, 0)) },
+  uFlash: { value: 0 },
+  uFlashPos: { value: new THREE.Vector3() },
+  uFlashDir: { value: new THREE.Vector3(0, 0, -1) },
+  uWinPower: { value: 1 },
+  uWinTint: { value: new THREE.Color(1, 1, 1) },
+};
+scene.background = shared.uFogColor.value;
+
+const GLSL_COMMON = /* glsl */`
+#define NL ${NL}
+uniform float uTime;
+uniform float uPS1;
+uniform vec2 uSnap;
+uniform vec3 uFogColor;
+uniform float uFogDensity;
+uniform vec3 uAmbSky;
+uniform vec3 uAmbGround;
+uniform vec4 uLP[NL];
+uniform vec4 uLC[NL];
+uniform float uFlash;
+uniform vec3 uFlashPos;
+uniform vec3 uFlashDir;
+uniform int uZone;
+uniform float uAmbMul;
+uniform float uUnlit;
+vec3 lightAt(vec3 p, vec3 n) {
+  vec3 L = mix(uAmbGround, uAmbSky, clamp(n.y * 0.5 + 0.5, 0.0, 1.0)) * uAmbMul;
+  for (int i = 0; i < NL; i++) {
+    int lz = int(uLC[i].w + 0.5);
+    if ((lz & uZone) == 0) continue;
+    vec3 d = uLP[i].xyz - p;
+    float dist = length(d) + 1e-4;
+    float att = clamp(1.0 - dist / uLP[i].w, 0.0, 1.0);
+    att *= att;
+    float ndl = max(dot(n, d / dist) * 0.65 + 0.35, 0.0);
+    L += uLC[i].rgb * (att * ndl);
+  }
+  if (uFlash > 0.5) {
+    vec3 d = p - uFlashPos;
+    float dist = length(d) + 1e-4;
+    vec3 dn = d / dist;
+    float cone = smoothstep(0.74, 0.93, dot(dn, uFlashDir));
+    float att = clamp(1.0 - dist / 30.0, 0.0, 1.0);
+    float ndl = max(dot(n, -dn) * 0.5 + 0.5, 0.0);
+    L += vec3(1.0, 0.93, 0.8) * (cone * att * att * ndl * 3.2) + vec3(0.07, 0.07, 0.08) * att * att;
+  }
+  return L;
+}
+`;
+
+const VS = /* glsl */`
+${GLSL_COMMON}
+uniform vec2 uRepeat;
+varying vec3 vUvA;
+varying vec2 vUvP;
+varying vec4 vLA;
+varying vec3 vWP;
+varying vec3 vWN;
+varying float vDist;
+void main() {
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vec3 wn = mat3(modelMatrix) * normal;
+  wn = wn / max(length(wn), 1e-5);
+  vec4 mv = viewMatrix * wp;
+  vec4 clip = projectionMatrix * mv;
+  if (uPS1 > 0.5 && clip.w > 0.05) {           // vertex snapping in clip space
+    vec2 ndc = clip.xy / clip.w;
+    ndc = floor(ndc * uSnap + 0.5) / uSnap;
+    clip.xy = ndc * clip.w;
+  }
+  gl_Position = clip;
+  vec2 tuv = uv * uRepeat;
+  vUvP = tuv;
+  vUvA = vec3(tuv * clip.w, clip.w);            // affine (screen-linear) uv trick
+  vec3 L = uUnlit > 0.5 ? vec3(1.0) : lightAt(wp.xyz, wn);
+  vLA = vec4(L * clip.w, clip.w);               // Gouraud light, also affine
+  vWP = wp.xyz;
+  vWN = wn;
+  vDist = length(mv.xyz);
+}`;
+
+const FS = /* glsl */`
+${GLSL_COMMON}
+uniform sampler2D uMap;
+uniform float uHasMap;
+uniform vec3 uColor;
+uniform float uAlphaTest;
+uniform float uOpacity;
+uniform vec3 uEmissive;
+uniform float uPulse;
+uniform float uFogMul;
+uniform sampler2D uEmitMap;
+uniform float uHasEmit;
+uniform float uWinPower;
+uniform vec3 uWinTint;
+#ifdef TWO_TONE
+uniform sampler2D uMap2;
+uniform vec3 uStair;   // x: landing edge z, y: mid-landing edge z, z: stairwell centre x
+#endif
+varying vec3 vUvA;
+varying vec2 vUvP;
+varying vec4 vLA;
+varying vec3 vWP;
+varying vec3 vWN;
+varying float vDist;
+void main() {
+  vec2 uv = uPS1 > 0.5 ? vUvA.xy / vUvA.z : vUvP;
+  vec4 tex = uHasMap > 0.5 ? texture2D(uMap, uv) : vec4(1.0);
+#ifdef TWO_TONE
+  // stairwell paint line: 1.42 m above the stair line, repeating every floor (2.8 m)
+  float s = 1.4;
+  if (vWP.z > uStair.x) s = 0.0;
+  else if (vWP.z > uStair.y) {
+    float t = (uStair.x - vWP.z) / (uStair.x - uStair.y);
+    s = vWP.x > uStair.z ? 1.4 * t : 2.8 - 1.4 * t;
+  }
+  float h = mod(vWP.y - s, 2.8);
+  float wob = sin(vWP.x * 9.0 + vWP.z * 7.0) * 0.012 + sin((vWP.x - vWP.z) * 31.0) * 0.006;
+  float line = 1.42 + wob;
+  if (h > line) tex = texture2D(uMap2, uv);
+  if (abs(h - line) < 0.022) tex.rgb *= 0.4;
+#endif
+  if (tex.a < uAlphaTest) discard;
+  vec3 base = tex.rgb * uColor;
+  vec3 L;
+  if (uUnlit > 0.5) L = vec3(1.0);
+  else if (uPS1 > 0.5) L = vLA.rgb / vLA.a;
+  else L = lightAt(vWP, normalize(vWN));
+  vec3 col = base * L;
+  float emitAmt = 0.0;
+  if (uHasEmit > 0.5) {
+    float m = clamp(texture2D(uEmitMap, uv).r * uWinPower, 0.0, 1.0);
+    col = mix(col, tex.rgb * uWinTint * 1.35, m);
+    emitAmt = m;
+  }
+  col += uEmissive * (1.0 + uPulse * 0.3 * sin(uTime * 3.2));
+  float fd = uFogDensity * uFogMul * vDist;
+  float fog = 1.0 - exp(-fd * fd);
+  fog *= 1.0 - 0.5 * emitAmt;
+  col = mix(col, uFogColor, clamp(fog, 0.0, 1.0));
+  gl_FragColor = vec4(col, tex.a * uOpacity);
+}`;
+
+const SHARED_KEYS = Object.keys(shared);
+function mat(o = {}) {
+  const u = {};
+  for (const k of SHARED_KEYS) u[k] = shared[k];
+  Object.assign(u, {
+    uMap: { value: o.map || null },
+    uHasMap: { value: o.map ? 1 : 0 },
+    uColor: { value: new THREE.Color(o.color ?? 0xffffff) },
+    uAlphaTest: { value: o.alphaTest ?? 0 },
+    uOpacity: { value: o.opacity ?? 1 },
+    uEmissive: { value: new THREE.Color(o.emissive ?? 0x000000) },
+    uPulse: { value: o.pulse ?? 0 },
+    uFogMul: { value: o.fogMul ?? 1 },
+    uEmitMap: { value: o.emitMap || null },
+    uHasEmit: { value: o.emitMap ? 1 : 0 },
+    uZone: { value: o.zone ?? Z_OUT },
+    uAmbMul: { value: o.ambMul ?? 1 },
+    uUnlit: { value: o.unlit ? 1 : 0 },
+    uRepeat: { value: new THREE.Vector2(1, 1) },
+    uMap2: { value: o.map2 || null },
+    uStair: { value: o.stair || new THREE.Vector3() },
+  });
+  const m = new THREE.ShaderMaterial({
+    uniforms: u, vertexShader: VS, fragmentShader: FS,
+    defines: o.twoTone ? { TWO_TONE: 1 } : {},
+    side: o.side ?? THREE.FrontSide,
+    transparent: !!o.transparent,
+    depthWrite: o.depthWrite ?? true,
+  });
+  // Vertex snapping shifts layered surfaces by up to a pixel, so anything lying on top of
+  // another surface (floors over the ground, decals over walls) gets a slope-scaled depth offset.
+  // decal > 0 pulls the surface toward the camera, decal < 0 pushes it away (used for the ground itself).
+  if (o.decal) { const f = o.decal === true ? 2 : o.decal; m.polygonOffset = true; m.polygonOffsetFactor = -f; m.polygonOffsetUnits = -4 * Math.sign(f); }
+  return m;
+}
+
+// ------------------------------------------------------------------ textures
+const ALL_TEX = [];
+function setupTex(t, mip = true) {
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = THREE.NearestFilter;
+  t.minFilter = mip ? THREE.NearestMipmapNearestFilter : THREE.NearestFilter;
+  t.generateMipmaps = mip;
+  t.colorSpace = THREE.NoColorSpace;
+  t.userData.mip = mip;
+  ALL_TEX.push(t);
+  return t;
+}
+const manager = new THREE.LoadingManager();
+const loader = new THREE.TextureLoader(manager);
+const T = {};
+for (const n of ['concrete', 'greenpaint', 'plaster', 'asphalt', 'step', 'rust', 'whitepanel', 'garage', 'fence', 'tiles', 'floortile']) {
+  T[n] = setupTex(loader.load(`textures/${n}.png`));
+}
+T.facade = setupTex(loader.load('textures/facade.png'), false);
+T.facade_emit = setupTex(loader.load('textures/facade_emit.png'), false);
+manager.onError = (url) => console.warn('texture failed to load:', url);
+
+function canvasTex(w, h, draw, opts = {}) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  return setupTex(new THREE.CanvasTexture(c), opts.mip !== false);
+}
+
+// ------------------------------------------------------------------ helpers: rng, geometry, batching, colliders
+function rng(seed) {
+  let a = (seed >>> 0) || 1;
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function hash1(n) { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); }
+function flick(t, seed, rate = 0.08) {
+  const h = hash1(Math.floor(t * 14) + seed * 101.3);
+  const burst = hash1(Math.floor(t * 0.7) + seed * 7.7) < 0.35;
+  return burst && h < 0.45 ? 0.1 + h * 0.3 : (h < rate ? 0.3 : 1);
+}
+
+const _e = new THREE.Euler(), _q = new THREE.Quaternion(), _v = new THREE.Vector3(), _one = new THREE.Vector3(1, 1, 1), _m4 = new THREE.Matrix4();
+function place(g, x, y, z, ry = 0, rx = 0, rz = 0) {
+  _e.set(rx, ry, rz, 'YXZ'); _q.setFromEuler(_e);
+  _m4.compose(_v.set(x, y, z), _q, _one);
+  return g.applyMatrix4(_m4);
+}
+// Box projection of UVs from (current) vertex positions: s metres per texture repeat.
+function worldUV(g, s = 2) {
+  const P = g.attributes.position, N = g.attributes.normal, UV = g.attributes.uv;
+  for (let i = 0; i < P.count; i++) {
+    const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
+    const nx = N.getX(i), ny = N.getY(i), nz = N.getZ(i);
+    const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+    let u, v;
+    if (ay > ax && ay > az) { u = x; v = -z * Math.sign(ny); }
+    else if (ax > az) { u = -z * Math.sign(nx); v = y; }
+    else { u = x * Math.sign(nz); v = y; }
+    UV.setXY(i, u / s, v / s);
+  }
+  UV.needsUpdate = true;
+  return g;
+}
+function remapUV(g, u0, v0, u1, v1) {
+  const UV = g.attributes.uv;
+  for (let i = 0; i < UV.count; i++) UV.setXY(i, u0 + UV.getX(i) * (u1 - u0), v0 + UV.getY(i) * (v1 - v0));
+  return g;
+}
+function prep(g) {
+  for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
+  if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+  if (!g.attributes.normal) g.computeVertexNormals();
+  if (!g.index) { const n = g.attributes.position.count, idx = []; for (let i = 0; i < n; i++) idx.push(i); g.setIndex(idx); }
+  g.morphAttributes = {};
+  g.clearGroups();
+  return g;
+}
+// Collects world-space geometry per material, merges into one mesh per material.
+class Batch {
+  constructor() { this.map = new Map(); }
+  add(g, m) { let a = this.map.get(m); if (!a) this.map.set(m, a = []); a.push(g); return g; }
+  build(parent) {
+    const out = [];
+    for (const [m, list] of this.map) {
+      const mesh = new THREE.Mesh(mergeGeometries(list.map(prep), false), m);
+      parent.add(mesh); out.push(mesh);
+    }
+    this.map.clear();
+    return out;
+  }
+}
+// Same, but transforms geometry by a matrix first (used for panel blocks built in local space).
+class XBatch {
+  constructor(base, matrix) { this.base = base; this.m = matrix; }
+  add(g, m) { g.applyMatrix4(this.m); return this.base.add(g, m); }
+}
+class LineBatch {
+  constructor() { this.map = new Map(); }
+  seg(m, x0, y0, z0, x1, y1, z1, mtx) {
+    let a = this.map.get(m); if (!a) this.map.set(m, a = []);
+    if (mtx) {
+      const p = new THREE.Vector3(x0, y0, z0).applyMatrix4(mtx), q = new THREE.Vector3(x1, y1, z1).applyMatrix4(mtx);
+      a.push(p.x, p.y, p.z, q.x, q.y, q.z);
+    } else a.push(x0, y0, z0, x1, y1, z1);
+  }
+  build(parent) {
+    const out = [];
+    for (const [m, arr] of this.map) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+      const n = new Float32Array(arr.length); for (let i = 1; i < n.length; i += 3) n[i] = 1;
+      g.setAttribute('normal', new THREE.BufferAttribute(n, 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(arr.length / 3 * 2), 2));
+      const ls = new THREE.LineSegments(g, m);
+      parent.add(ls); out.push(ls);
+    }
+    this.map.clear();
+    return out;
+  }
+}
+
+const COLS = [];
+function addCol(x0, y0, z0, x1, y1, z1, grab = false) { COLS.push({ x0, y0, z0, x1, y1, z1, grab }); }
+
+function boxGeo(w, h, d, seg = 2.5) {
+  return new THREE.BoxGeometry(w, h, d, Math.max(1, Math.ceil(w / seg)), Math.max(1, Math.ceil(h / seg)), Math.max(1, Math.ceil(d / seg)));
+}
+// Box whose BOTTOM centre is at (x, y, z).
+function box(b, m, x, y, z, w, h, d, o = {}) {
+  const g = boxGeo(w, h, d, o.seg ?? 2.5);
+  place(g, x, y + h / 2, z, o.ry || 0);
+  if (o.uv !== false) worldUV(g, o.uvs ?? 2);
+  b.add(g, m);
+  if (o.col) {
+    const sw = o.ry && Math.abs(Math.sin(o.ry)) > 0.5;
+    const hw = (sw ? d : w) / 2, hd = (sw ? w : d) / 2;
+    addCol(x - hw, y, z - hd, x + hw, y + h, z + hd, !!o.grab);
+  }
+  return g;
+}
+// Plane centred at (x, y, z). Default faces +z; ry/rx rotate it (YXZ order).
+function quad(b, m, w, h, x, y, z, ry = 0, rx = 0, o = {}) {
+  const seg = o.seg ?? 2.5;
+  const g = new THREE.PlaneGeometry(w, h, Math.max(1, Math.ceil(w / seg)), Math.max(1, Math.ceil(h / seg)));
+  if (o.uv) remapUV(g, ...o.uv);
+  place(g, x, y, z, ry, rx);
+  if (o.world) worldUV(g, o.world);
+  return b.add(g, m);
+}
+const _up = new THREE.Vector3(0, 1, 0);
+function rod(b, m, x0, y0, z0, x1, y1, z1, r = 0.03, seg = 5) {
+  const a = new THREE.Vector3(x0, y0, z0), c = new THREE.Vector3(x1, y1, z1);
+  const dir = c.clone().sub(a); const len = dir.length(); dir.normalize();
+  const g = new THREE.CylinderGeometry(r, r, len, seg);
+  g.applyMatrix4(new THREE.Matrix4().compose(a.add(c).multiplyScalar(0.5), new THREE.Quaternion().setFromUnitVectors(_up, dir), _one));
+  return b.add(g, m);
+}
+// Window/door frame of four thin boxes around a w x h opening centred at (cx, cy, cz), rotated by ry.
+function frame(b, m, cx, cy, cz, w, h, ry = 0, t = 0.06, depth = 0.05) {
+  const c = Math.cos(ry), s = Math.sin(ry);
+  for (const [ox, oy, pw, ph] of [[0, h / 2 + t / 2, w + 2 * t, t], [0, -h / 2 - t / 2, w + 2 * t, t], [-w / 2 - t / 2, 0, t, h], [w / 2 + t / 2, 0, t, h]]) {
+    const g = new THREE.BoxGeometry(pw, ph, depth);
+    place(g, cx + ox * c, cy + oy, cz - ox * s, ry);
+    worldUV(g, 1);
+    b.add(g, m);
+  }
+}
+// ------------------------------------------------------------------ lights (fixed slots; colours animated per frame)
+const L = [];
+function addLight(x, y, z, color, range, zone, kind, extra = {}) {
+  L.push({ p: new THREE.Vector3(x, y, z), c: new THREE.Color(...color), r: range, z: zone, kind, mats: [], ...extra });
+  return L.length - 1;
+}
+const LI = {
+  nb0: addLight(0, 2.95, 3.0, [1.45, 1.48, 1.55], 9, Z_NB, 'nb0'),
+  nb1: addLight(0, 2.95, 7.0, [1.45, 1.48, 1.55], 9, Z_NB, 'nb1'),
+  pad: addLight(0.4, 0.5, 4.6, [0.25, 1.0, 1.15], 4.5, Z_NB, 'pad'),
+  booth: addLight(-5.6, 1.9, -11.4, [1.5, 1.05, 0.55], 7.5, Z_OUT, 'booth'),
+  kpp: addLight(-3.15, 6.6, -9.5, [2.2, 1.5, 0.8], 18, Z_OUT, 'street'),
+  y1: addLight(-4.15, 6.6, -30, [2.2, 1.5, 0.8], 18, Z_OUT, 'street'),
+  y2: addLight(4.15, 6.6, -58, [2.2, 1.5, 0.8], 18, Z_OUT, 'street', { flick: true }),
+  ent: addLight(0, 2.4, -75.2, [1.5, 1.15, 0.7], 7.5, Z_OUT | Z_ST, 'bulb'),
+  st0: addLight(0.45, 2.25, -77.15, [1.15, 0.95, 0.62], 6.5, Z_ST, 'stbulb'),
+  st1: addLight(0.45, 5.05, -77.15, [1.15, 0.95, 0.62], 6.5, Z_ST, 'stbulb'),
+  st2: addLight(0.45, 7.85, -77.15, [1.15, 0.95, 0.62], 6.5, Z_ST, 'stbulb'),
+  st3: addLight(0.45, 10.65, -77.15, [1.15, 0.95, 0.62], 6.5, Z_ST, 'stbulb'),
+  eye: addLight(0, -50, 0, [1.4, 0.08, 0.04], 4.5, Z_OUT | Z_ST, 'eye'),
+  garage: addLight(15.45, 2.3, -39.8, [1.4, 1.05, 0.6], 6.5, Z_OUT, 'bulb'),
+  spill: addLight(0, 1.7, -1.2, [0.6, 0.65, 0.7], 6, Z_OUT, 'spill'),
+  eye2: addLight(0, -50, 0, [1.4, 0.08, 0.04], 3.5, Z_ST, 'eye2'),
+};
+
+// ------------------------------------------------------------------ procedural canvas textures
+const TC = {};
+function blobTex(img, seed) {
+  return canvasTex(64, 64, (g) => {
+    const r = rng(seed);
+    if (img) g.drawImage(img, 0, 0, 64, 64); else { g.fillStyle = '#2f5a2c'; g.fillRect(0, 0, 64, 64); }
+    g.globalCompositeOperation = 'destination-in';
+    g.beginPath();
+    const n = 16;
+    for (let i = 0; i <= n; i++) {
+      const a = i / n * Math.PI * 2, rr = 17 + r() * 13;
+      const x = 32 + Math.cos(a) * rr, y = 32 + Math.sin(a) * rr;
+      if (i) g.lineTo(x, y); else g.moveTo(x, y);
+    }
+    g.closePath();
+    for (let i = 0; i < 6; i++) { const x = 6 + r() * 52, y = 6 + r() * 52, rr = 2 + r() * 4; g.moveTo(x + rr, y); g.arc(x, y, rr, 0, Math.PI * 2); }
+    g.fillStyle = '#fff'; g.fill();
+    g.globalCompositeOperation = 'source-over';
+  }, { mip: false });
+}
+function makeCanvasTextures() {
+  TC.lawn = canvasTex(64, 64, (g) => {
+    const r = rng(5); g.fillStyle = '#383b26'; g.fillRect(0, 0, 64, 64);
+    const cols = ['#4a3f29', '#45522f', '#2b2f1f', '#55583a'];
+    for (let i = 0; i < 900; i++) { g.fillStyle = cols[(r() * 4) | 0]; g.fillRect((r() * 64) | 0, (r() * 64) | 0, 1 + ((r() * 2) | 0), 1 + ((r() * 2) | 0)); }
+  });
+  TC.bark = canvasTex(32, 128, (g) => {
+    const r = rng(9); g.fillStyle = '#d6d3c9'; g.fillRect(0, 0, 32, 128);
+    for (let i = 0; i < 26; i++) { g.fillStyle = '#aaa79e'; g.fillRect(r() * 32, r() * 128, 6 + r() * 10, 1); }
+    for (let i = 0; i < 46; i++) { g.fillStyle = r() < 0.8 ? '#1d1b19' : '#5d5a53'; g.fillRect(r() * 32 - 4, r() * 128, 3 + r() * 12, 1 + r() * 2.5); }
+  });
+  TC.stripe = canvasTex(32, 8, (g) => { g.fillStyle = '#b3201b'; g.fillRect(0, 0, 16, 8); g.fillStyle = '#e6e2d8'; g.fillRect(16, 0, 16, 8); });
+  TC.boothWin = canvasTex(64, 64, (g) => {
+    const gr = g.createLinearGradient(0, 0, 0, 64); gr.addColorStop(0, '#ffe2a0'); gr.addColorStop(1, '#e8963e');
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    g.fillStyle = 'rgba(110,60,20,0.32)'; for (let y = 1; y < 30; y += 4) g.fillRect(0, y, 64, 2);
+    g.fillStyle = '#2e1c0e'; g.beginPath(); g.arc(42, 31, 7, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.moveTo(28, 64); g.lineTo(31, 44); g.quadraticCurveTo(42, 37, 53, 44); g.lineTo(56, 64); g.fill();
+    g.fillStyle = '#4b2e14'; g.fillRect(0, 54, 64, 10);
+  }, { mip: false });
+  TC.sign = canvasTex(128, 32, (g) => {
+    g.fillStyle = '#1c3a4d'; g.fillRect(0, 0, 128, 32);
+    g.strokeStyle = '#d5dade'; g.lineWidth = 2; g.strokeRect(2, 2, 124, 28);
+    g.fillStyle = '#eef2f4'; g.font = 'bold 24px Arial, Helvetica, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('КПП', 64, 17);
+  }, { mip: false });
+  TC.noEntry = canvasTex(64, 64, (g) => {
+    g.clearRect(0, 0, 64, 64);
+    g.fillStyle = '#f0ece4'; g.beginPath(); g.arc(32, 32, 31, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#c3141f'; g.beginPath(); g.arc(32, 32, 28, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#f2efe8'; g.fillRect(9, 26, 46, 12);
+  }, { mip: false });
+  TC.crate = canvasTex(64, 64, (g) => {
+    const r = rng(12); g.fillStyle = '#7b5b37'; g.fillRect(0, 0, 64, 64);
+    for (let y = 0; y < 64; y += 16) { g.fillStyle = r() < 0.5 ? '#6e5031' : '#86643e'; g.fillRect(2, y + 1, 60, 14); g.fillStyle = '#3e2c19'; g.fillRect(0, y, 64, 1); }
+    g.fillStyle = '#4a341d'; g.fillRect(0, 0, 64, 4); g.fillRect(0, 60, 64, 4); g.fillRect(0, 0, 4, 64); g.fillRect(60, 0, 4, 64);
+    g.save(); g.translate(32, 32); g.rotate(-Math.PI / 4); g.fillStyle = '#5a4024'; g.fillRect(-44, -3, 88, 6); g.restore();
+    for (let i = 0; i < 120; i++) { g.fillStyle = 'rgba(30,20,10,0.25)'; g.fillRect(r() * 64, r() * 64, 2, 1); }
+  });
+  TC.mailbox = canvasTex(64, 64, (g) => {
+    const r = rng(21); g.fillStyle = '#2f3a40'; g.fillRect(0, 0, 64, 64);
+    for (let row = 0; row < 3; row++) for (let c = 0; c < 4; c++) {
+      const x = 2 + c * 15.5, y = 2 + row * 20.5;
+      g.fillStyle = r() < 0.2 ? '#5f6f63' : '#5d6f7c'; g.fillRect(x, y, 14, 19);
+      g.fillStyle = '#16191b'; g.fillRect(x + 2, y + 4, 10, 2);
+      g.fillStyle = '#d8d8d0'; g.fillRect(x + 4, y + 12, 6, 3);
+      if (r() < 0.4) { g.fillStyle = '#8a4a26'; g.fillRect(x + r() * 10, y + r() * 15, 3, 3); }
+    }
+  });
+  TC.aptDoor = canvasTex(64, 128, (g) => {
+    g.fillStyle = '#5a2620'; g.fillRect(0, 0, 64, 128);
+    g.strokeStyle = '#3a1611'; g.lineWidth = 1;
+    for (let k = -128; k < 192; k += 12) {
+      g.beginPath(); g.moveTo(k, 0); g.lineTo(k + 128, 128); g.stroke();
+      g.beginPath(); g.moveTo(k + 128, 0); g.lineTo(k, 128); g.stroke();
+    }
+    g.fillStyle = '#c9b28a';
+    for (let i = 0; i < 27; i++) for (let j = 0; j < 27; j++) {
+      const u = -128 + 12 * i, v = 12 * j, x = (u + v) / 2, y = (v - u) / 2;
+      if (x > 3 && x < 61 && y > 3 && y < 125) g.fillRect(x - 1, y - 1, 2, 2);
+    }
+    g.fillStyle = '#d6d0c4'; g.fillRect(50, 62, 8, 3);
+    g.fillStyle = '#151515'; g.fillRect(31, 34, 2, 2);
+    g.fillStyle = '#c8c3b6'; g.fillRect(26, 14, 12, 7);
+    g.strokeStyle = '#260d09'; g.lineWidth = 3; g.strokeRect(1.5, 1.5, 61, 125);
+  });
+  TC.radiator = canvasTex(64, 32, (g) => { g.fillStyle = '#cfc8b4'; g.fillRect(0, 0, 64, 32); g.fillStyle = '#8f8a78'; for (let x = 3; x < 64; x += 6) g.fillRect(x, 2, 2, 28); });
+  TC.floorNum = canvasTex(32, 32, (g) => {
+    g.clearRect(0, 0, 32, 32); g.fillStyle = '#6e1a14'; g.font = 'bold 28px Arial, Helvetica, sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('2', 16, 18);
+  }, { mip: false });
+  TC.doorMetal = canvasTex(64, 128, (g) => {
+    const r = rng(31); g.fillStyle = '#3d3a30'; g.fillRect(0, 0, 64, 128);
+    g.strokeStyle = '#25231d'; g.lineWidth = 2; g.strokeRect(5, 5, 54, 56); g.strokeRect(5, 67, 54, 56);
+    g.fillStyle = '#9c9a90'; g.fillRect(50, 64, 7, 4);
+    for (let i = 0; i < 160; i++) { g.fillStyle = r() < 0.5 ? 'rgba(120,60,25,0.35)' : 'rgba(20,18,14,0.3)'; g.fillRect(r() * 64, r() * 128, 2 + r() * 3, 1 + r() * 4); }
+  });
+  TC.mushroom = canvasTex(64, 32, (g) => {
+    const r = rng(4); g.fillStyle = '#a3291f'; g.fillRect(0, 0, 64, 32); g.fillStyle = '#efe9dc';
+    for (let i = 0; i < 14; i++) { g.beginPath(); g.arc(r() * 64, 4 + r() * 22, 2 + r() * 2.5, 0, Math.PI * 2); g.fill(); }
+  });
+  TC.sand = canvasTex(32, 32, (g) => {
+    const r = rng(8); g.fillStyle = '#8d7d58'; g.fillRect(0, 0, 32, 32);
+    for (let i = 0; i < 200; i++) { g.fillStyle = r() < 0.5 ? '#7a6b4a' : '#a08f68'; g.fillRect((r() * 32) | 0, (r() * 32) | 0, 1, 1); }
+  });
+  TC.pad = canvasTex(64, 64, (g) => {
+    g.fillStyle = '#10181d'; g.fillRect(0, 0, 64, 64);
+    g.fillStyle = '#1d6f7c'; for (let i = 4; i < 64; i += 8) { g.fillRect(i, 2, 1, 60); g.fillRect(2, i, 60, 1); }
+    g.fillStyle = '#2fb6c8'; g.fillRect(28, 28, 8, 8);
+  }, { mip: false });
+  TC.blob = blobTex(T.greenpaint.image, 3);
+  TC.blob2 = blobTex(T.greenpaint.image, 17);
+  TC.blobTiles = blobTex(T.tiles.image, 5);
+}
+
+// ------------------------------------------------------------------ materials
+const M = {};
+function makeMaterials() {
+  const em = (hex, o = {}) => mat({ unlit: true, color: 0x000000, emissive: hex, ...o });
+  // outdoor
+  M.asphalt = mat({ map: T.asphalt, decal: -4 });
+  M.concrete = mat({ map: T.concrete });
+  M.concreteDark = mat({ map: T.concrete, color: 0x8c8c88 });
+  M.facade = mat({ map: T.facade, emitMap: T.facade_emit });
+  M.facadeSky = mat({ map: T.facade, emitMap: T.facade_emit, fogMul: 0.3 });
+  M.facadeSky.uniforms.uWinPower = { value: 1 };
+  M.facadeSky.uniforms.uWinTint = { value: new THREE.Color(1, 1, 1) };
+  M.concreteSky = mat({ map: T.concrete, fogMul: 0.3 });
+  M.concreteSkyDark = mat({ map: T.concrete, color: 0x8c8c88, fogMul: 0.3 });
+  M.fence = mat({ map: T.fence });
+  M.garage = mat({ map: T.garage, decal: true });
+  M.garage2 = mat({ map: T.garage, color: 0xa4b4c4, decal: true });
+  M.garage3 = mat({ map: T.garage, color: 0xd09a74, decal: true });
+  M.roof = mat({ map: T.asphalt, color: 0x8a8a8a });
+  M.metalDark = mat({ map: T.rust, color: 0x5a5a50 });
+  M.plasterOut = mat({ map: T.plaster, color: 0xd2cec2 });
+  M.lawn = mat({ map: TC.lawn });
+  M.stripe = mat({ map: TC.stripe, ambMul: 1.3 });
+  M.redPaint = mat({ color: 0x8e2a22 });
+  M.boothWin = mat({ map: TC.boothWin, unlit: true, fogMul: 0.6, decal: true });
+  M.sign = mat({ map: TC.sign, unlit: true, color: 0xb0b0b0, fogMul: 0.8, decal: true });
+  M.noEntry = mat({ map: TC.noEntry, alphaTest: 0.5, ambMul: 1.6 });
+  M.signBack = mat({ map: TC.noEntry, alphaTest: 0.5, color: 0x4a4a4a });
+  M.crate = mat({ map: TC.crate });
+  M.doorMetal = mat({ map: TC.doorMetal, decal: true });
+  M.wire = mat({ unlit: true, color: 0x24262a });
+  M.wireSky = mat({ unlit: true, color: 0x24262a, fogMul: 0.3 });
+  M.twig = mat({ unlit: true, color: 0x2a2724 });
+  M.birch = mat({ map: TC.bark, ambMul: 1.2 });
+  M.pine = mat({ color: 0x223026 });
+  M.pineTrunk = mat({ color: 0x3a2e24 });
+  M.puddle = mat({ color: 0x1c222a, decal: 1 });
+  M.cyan = em(0x38eaff, { pulse: 1, fogMul: 0.45 });
+  M.paintR = mat({ color: 0x9a3a2c }); M.paintY = mat({ color: 0xb59a3a });
+  M.paintB = mat({ color: 0x3e6a8e }); M.paintG = mat({ color: 0x4f7a42 });
+  M.wood = mat({ color: 0x6b4f33 });
+  M.sand = mat({ map: TC.sand, decal: 1 });
+  M.mushroom = mat({ map: TC.mushroom });
+  M.bulbWarm = em(0xffd88a, { fogMul: 0.6 });
+  M.bulbOff = mat({ color: 0x6a645c });
+  M.entBulb = em(0xffd88a, { fogMul: 0.6 });
+  M.garageBulb = em(0xffd88a, { fogMul: 0.6 });
+  // NetBox interior
+  const nb = (o) => mat({ zone: Z_NB, ...o });
+  M.nbWhite = nb({ map: T.whitepanel });
+  M.nbWhiteDirty = nb({ map: T.whitepanel, color: 0xaeac9e, decal: true });
+  M.nbTilesF = nb({ map: T.tiles });
+  M.nbConcreteF = nb({ map: T.concrete, color: 0x9a9a96 });
+  M.nbWhite2 = nb({ map: T.whitepanel, color: 0xeeeeee });
+  M.nbGreen = nb({ map: T.greenpaint });
+  M.nbTiles = nb({ map: T.tiles });
+  M.nbPlaster = nb({ map: T.plaster });
+  M.nbPlasterDark = nb({ map: T.plaster, color: 0x9a948a });
+  M.nbConcrete = nb({ map: T.concrete, color: 0x9a9a96 });
+  M.nbFloor = nb({ map: T.floortile });
+  M.nbFloorDirty = nb({ map: T.floortile, color: 0x9a968c });
+  M.nbShelf = nb({ map: T.whitepanel, color: 0xf2f2f2 });
+  M.nbShelf2 = nb({ map: T.whitepanel, color: 0xc9c5b8 });
+  M.nbRust = nb({ map: T.rust });
+  M.nbCushion = nb({ color: 0x1d1f22 });
+  M.nbBlob = nb({ map: TC.blob, alphaTest: 0.5, decal: true });
+  M.nbBlob2 = nb({ map: TC.blob2, alphaTest: 0.5, decal: true });
+  M.nbBlobTiles = nb({ map: TC.blobTiles, alphaTest: 0.5, decal: true });
+  M.nbLine = nb({ color: 0x0e1410, decal: 3 });
+  M.nbMailbox = nb({ map: TC.mailbox });
+  M.nbRadiator = nb({ map: TC.radiator });
+  M.gearDark = nb({ color: 0x2b2f34 }); M.gearMid = nb({ color: 0x4d535b }); M.gearAccent = nb({ color: 0xc29a3a });
+  M.screen = em(0x52e0b4); M.screen2 = em(0x6aa8ff);
+  M.padInner = mat({ map: TC.pad, unlit: true, color: 0xb4b4b4, decal: 2 });
+  M.padGlow = em(0x3ff0ff, { pulse: 1 });
+  M.padLine = mat({ unlit: true, color: 0x1a6a78 });
+  M.padWire = mat({ unlit: true, color: 0x46f4ff });
+  M.nbPanel0 = em(0xffffff, { decal: true }); M.nbPanel1 = em(0xffffff, { decal: true });
+  M.nbPanelDead = nb({ color: 0x3a3a38, decal: true });
+  M.nbBulb = em(0xffd88a);
+  M.nbStrip = em(0xe8f4ff, { decal: true });
+  M.nbStrip3 = em(0xff3020, { decal: true });
+  M.nbEdge = em(0xb8d4e0, { fogMul: 0.6 });
+  M.nbReveal1 = mat({ map: T.whitepanel, zone: Z_NB | Z_OUT });
+  M.nbReveal3 = mat({ map: T.concrete, zone: Z_NB | Z_OUT, color: 0x9a9a92 });
+  M.shell1 = mat({ map: T.whitepanel, color: 0xe4e8ea });
+  M.shell2 = mat({ map: T.plaster, color: 0xc4c4b4 });
+  M.shell3 = mat({ map: T.concrete, color: 0x9a9a92 });
+  // stairwell interior
+  const st = (o) => mat({ zone: Z_ST, ambMul: 0.35, ...o });
+  M.stWall = st({ map: T.greenpaint, map2: T.plaster, twoTone: true, stair: new THREE.Vector3(-78.0, -80.24, 0) });
+  M.stPlaster = st({ map: T.plaster, color: 0xc8c4b8 });
+  M.stTiles = st({ map: T.tiles, decal: true });
+  M.stStep = st({ map: T.step });
+  M.stMetal = st({ map: T.rust, color: 0x3c4436 });
+  M.stWood = st({ color: 0xd8d4c8 });
+  M.mailbox = st({ map: TC.mailbox });
+  M.aptDoor = st({ map: TC.aptDoor, decal: true });
+  M.aptDoor2 = st({ map: TC.aptDoor, color: 0x8a9ab0, decal: true });
+  M.aptFrame = st({ color: 0x3a2a20 });
+  M.floorNum = st({ map: TC.floorNum, alphaTest: 0.5, decal: true });
+  M.radiator = st({ map: TC.radiator });
+  M.paper = st({ color: 0xcfcab8, decal: true });
+  M.stGlass = mat({ unlit: true, color: 0x1a1f28, decal: true });
+  M.stBulb = em(0xffd88a);
+  // security entity
+  M.skin = mat({ color: 0xdcd6cb, zone: Z_OUT | Z_ST, ambMul: 1.4 });
+  M.eye = em(0xff2a14, { fogMul: 0.35 });
+  // emissive materials that follow a light's current colour
+  L[LI.nb0].mats.push([M.nbPanel0, 0.75], [M.nbStrip, 0.6]);
+  L[LI.nb1].mats.push([M.nbPanel1, 0.75], [M.nbBulb, 0.8]);
+  L[LI.ent].mats.push([M.entBulb, 0.85]);
+  L[LI.garage].mats.push([M.garageBulb, 0.85]);
+  L[LI.st0].mats.push([M.stBulb, 0.85]);
+  L[LI.booth].mats.push([M.boothWin, 0.7, 'color']);
+}
+// ------------------------------------------------------------------ NetBox: the hackers' base, 3 absorption stages
+const nb = { groups: [], shell: null, wire: null };
+function buildNetBox() {
+  for (let s = 1; s <= 3; s++) {
+    const g = new THREE.Group(); g.visible = s === 1; scene.add(g); nb.groups.push(g);
+    const b = new Batch(), lb = new LineBatch();
+    nbStage(s, b, lb, g);
+    b.build(g); lb.build(g);
+  }
+  const sb = new Batch(); nbShell(sb); nb.shell = sb.build(scene)[0];
+  const cb = new Batch(); nbGear(cb); cb.build(scene);
+  addCol(-4.2, 0, -0.2, -4, 3.4, 10.2); addCol(4, 0, -0.2, 4.2, 3.4, 10.2); addCol(-4.2, 0, 10, 4.2, 3.4, 10.2);
+  addCol(-4.2, 0, -0.2, -1.333, 3.4, 0); addCol(1.333, 0, -0.2, 4.2, 3.4, 0); addCol(-1.333, 2.4, -0.2, 1.333, 3.4, 0);
+  addCol(-4.2, 3.2, -0.2, 4.2, 3.6, 10.2);
+  addCol(-4, 0, 3.2, -3.45, 2.4, 7.2);   // shelf
+  addCol(3.35, 0, 1.6, 4, 0.45, 4.4);    // bench
+}
+
+function nbStage(s, b, lb, group) {
+  const r = rng(40 + s);
+  // ---- walls
+  if (s < 3) {
+    const rows = [[0, 1.2], [1.2, 2.4], [2.4, 3.2]];
+    const walls = [];
+    for (let i = 0; i < 8; i++) {
+      const zc = 0.625 + 1.25 * i;
+      walls.push({ x: -3.997, z: zc, ry: Math.PI / 2, w: 1.25, front: 1 - zc / 10 });
+      walls.push({ x: 3.997, z: zc, ry: -Math.PI / 2, w: 1.25, front: 1 - zc / 10 });
+    }
+    for (let i = 0; i < 6; i++) {
+      const xc = -4 + 0.6667 + 1.3333 * i;
+      walls.push({ x: xc, z: 9.997, ry: Math.PI, w: 1.3333, front: 0 });
+      walls.push({ x: xc, z: 0.003, ry: 0, w: 1.3333, front: 1, door: Math.abs(xc) < 1.3 });
+    }
+    for (const wl of walls) for (let ri = 0; ri < 3; ri++) {
+      if (wl.door && ri < 2) continue;
+      const [y0, y1] = rows[ri];
+      let m = M.nbWhite;
+      if (s === 2) {
+        const v = r() * 0.7 + wl.front * 0.35 + (ri === 0 ? 0.15 : 0) - (ri === 2 ? 0.12 : 0);
+        if (v > 0.72) m = ri === 0 ? M.nbGreen : ri === 1 ? (r() < 0.5 ? M.nbTiles : M.nbGreen) : M.nbPlaster;
+        else if (v > 0.55 && r() < 0.7) {   // paint/tile blob creeping onto a still-white panel
+          const nx = Math.sin(wl.ry), nz = Math.cos(wl.ry), off = 0.004;
+          const bm = r() < 0.35 ? M.nbBlobTiles : (r() < 0.5 ? M.nbBlob : M.nbBlob2);
+          quad(b, bm, wl.w * 0.95, (y1 - y0) * 0.95, wl.x + nx * off, (y0 + y1) / 2 + (r() - 0.5) * 0.3, wl.z + nz * off, wl.ry);
+        }
+      }
+      quad(b, m, wl.w, y1 - y0, wl.x, (y0 + y1) / 2, wl.z, wl.ry, 0, { seg: 1.4 });
+    }
+  } else {
+    // stage 3: two-tone stairwell paint everywhere; a few dirty white panels survive near the ceiling
+    const W3 = [
+      { ry: Math.PI / 2, at: (u, off) => [-3.997 + off, u], u0: 0, u1: 10 },
+      { ry: -Math.PI / 2, at: (u, off) => [3.997 - off, u], u0: 0, u1: 10 },
+      { ry: Math.PI, at: (u, off) => [u, 9.997 - off], u0: -4, u1: 4 },
+      { ry: 0, at: (u, off) => [u, 0.003 + off], u0: -4, u1: 4, door: true },
+    ];
+    const piece = (m, w, u0, u1, y0, y1, off = 0, o = { world: 1.3, seg: 1.3 }) => {
+      const [x, z] = w.at((u0 + u1) / 2, off);
+      quad(b, m, u1 - u0, y1 - y0, x, (y0 + y1) / 2, z, w.ry, 0, o);
+    };
+    for (const w of W3) {
+      const spans = w.door ? [[w.u0, -1.333], [1.333, w.u1]] : [[w.u0, w.u1]];
+      for (const [u0, u1] of spans) {
+        piece(M.nbGreen, w, u0, u1, 0, 1.45);
+        piece(M.nbPlaster, w, u0, u1, 1.45, 3.2);
+        piece(M.nbLine, w, u0, u1, 1.435, 1.465, 0.002, { seg: 3 });
+      }
+      if (w.door) piece(M.nbPlaster, w, -1.333, 1.333, 2.4, 3.2);
+      for (let u = w.u0; u < w.u1 - 1.2; u += 1.3) if (r() < 0.25) piece(M.nbWhiteDirty, w, u, u + 1.25, 2.42, 3.15, 0.006, { seg: 2 });
+    }
+    box(b, M.nbMailbox, 3.875, 1.0, 7.1, 0.25, 0.7, 1.1, { uv: false });
+    box(b, M.nbRadiator, 1.6, 0.12, 9.94, 1.0, 0.5, 0.08, { uv: false });
+  }
+  // ---- floor
+  const fx = 5, fz = 6, cw = 8 / fx, cd = 10 / fz;
+  for (let i = 0; i < fx; i++) for (let j = 0; j < fz; j++) {
+    const x = -4 + cw * (i + 0.5), z = cd * (j + 0.5);
+    let m = M.nbFloor;
+    if (s === 2 && r() < 0.22 + (1 - z / 10) * 0.3) m = r() < 0.7 ? M.nbTilesF : M.nbConcreteF;
+    if (s === 3) { const v = r(); m = v < 0.6 ? M.nbTilesF : v < 0.85 ? M.nbConcreteF : M.nbFloorDirty; }
+    quad(b, m, cw, cd, x, 0.002, z, 0, -Math.PI / 2, { world: (m === M.nbFloor || m === M.nbFloorDirty) ? 1.6 : 1.2, seg: 1.7 });
+  }
+  if (s === 3) for (let i = 0; i < 16; i++) {
+    const x = -3.5 + r() * 7, z = 0.5 + r() * 9;
+    if (Math.abs(x - 0.4) < 1.3 && Math.abs(z - 4.6) < 1.3) continue;
+    box(b, M.nbPlaster, x, 0, z, 0.08 + r() * 0.2, 0.03 + r() * 0.05, 0.08 + r() * 0.16, { ry: r() * 3, uvs: 0.5 });
+  }
+  // ---- ceiling + light fixtures
+  for (let i = 0; i < 6; i++) for (let j = 0; j < 8; j++) {
+    let m = M.nbWhite;
+    if (s === 2 && r() < 0.25) m = M.nbPlaster;
+    if (s === 3) m = M.nbPlasterDark;
+    quad(b, m, 1.3333, 1.25, -4 + 1.3333 * (i + 0.5), 3.198, 1.25 * (j + 0.5), 0, Math.PI / 2, { seg: 2 });
+  }
+  const panel = (m, z) => quad(b, m, 1.6, 0.5, 0, 3.19, z, 0, Math.PI / 2, { seg: 2 });
+  const hangBulb = (x, z) => { lb.seg(M.wire, x, 3.2, z, x, 2.78, z); const g = new THREE.SphereGeometry(0.06, 6, 4); g.translate(x, 2.72, z); b.add(g, M.nbBulb); };
+  if (s === 1) { panel(M.nbPanel0, 3.0); panel(M.nbPanel1, 7.0); }
+  if (s === 2) { panel(M.nbPanel0, 3.0); panel(M.nbPanelDead, 7.0); hangBulb(0, 7.0); }
+  if (s === 3) {
+    const g = new THREE.BoxGeometry(1.6, 0.04, 0.5); place(g, 0.3, 2.86, 3.0, 0.2, 0, 0.35); b.add(g, M.nbPanelDead);
+    lb.seg(M.wire, -0.42, 3.2, 3.0, -0.44, 2.99, 3.0);
+    hangBulb(0, 7.0);
+  }
+  quad(b, s === 3 ? M.nbStrip3 : M.nbStrip, 0.08, 1.3, -2.1, 1.55, 0.007, 0, 0);
+  // ---- shelf and bench
+  const sm = s === 1 ? M.nbShelf : s === 2 ? M.nbShelf2 : M.nbRust;
+  box(b, sm, -3.725, 0, 3.22, 0.55, 2.4, 0.04, { uvs: 1 });
+  box(b, sm, -3.725, 0, 7.18, 0.55, 2.4, 0.04, { uvs: 1 });
+  for (const y of [0.08, 0.72, 1.32, 1.92, 2.36]) box(b, sm, -3.725, y, 5.2, 0.55, 0.04, 3.96, { uvs: 1 });
+  box(b, sm, -3.975, 0, 5.2, 0.03, 2.4, 3.96, { uvs: 1.2 });
+  box(b, s === 3 ? M.nbRust : M.nbWhite2, 3.675, 0, 3.0, 0.65, 0.38, 2.8, { uvs: 1.2 });
+  box(b, M.nbCushion, 3.675, 0.38, 3.0, 0.6, 0.07, 2.7);
+  // ---- upload pad: glowing square, or a broken cyan wireframe at stage 3
+  const px = 0.4, pz = 4.6;
+  if (s < 3) {
+    quad(b, M.padInner, 1.9, 1.9, px, 0.006, pz, 0, -Math.PI / 2);
+    box(b, M.padGlow, px, 0.008, pz - 0.95, 2.1, 0.045, 0.1, { uv: false });
+    box(b, M.padGlow, px, 0.008, pz + 0.95, 2.1, 0.045, 0.1, { uv: false });
+    box(b, M.padGlow, px - 0.95, 0.008, pz, 0.1, 0.045, 1.8, { uv: false });
+    box(b, M.padGlow, px + 0.95, 0.008, pz, 0.1, 0.045, 1.8, { uv: false });
+  } else {
+    const wire = new THREE.Group(); group.add(wire); nb.wire = wire;
+    const wb = new LineBatch();
+    for (const [hs, y] of [[1.0, 0.04], [0.72, 0.08], [0.44, 0.12]]) {
+      const pts = [[-hs, -hs], [hs, -hs], [hs, hs], [-hs, hs], [-hs, -hs]];
+      for (let i = 0; i < 4; i++) {
+        const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+        for (let k = 0; k < 4; k++) {
+          if (r() < 0.25) continue;
+          const t0 = k / 4, t1 = (k + 0.85) / 4;
+          wb.seg(M.padWire, px + ax + (bx - ax) * t0, y, pz + az + (bz - az) * t0, px + ax + (bx - ax) * t1, y, pz + az + (bz - az) * t1);
+        }
+      }
+    }
+    for (const [cx, cz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) wb.seg(M.padWire, px + cx, 0.04, pz + cz, px + cx * 0.44, 0.12 + 0.5 * r(), pz + cz * 0.44);
+    for (let i = 0; i < 7; i++) { const x = px + (r() - 0.5) * 1.6, z = pz + (r() - 0.5) * 1.6; wb.seg(M.padWire, x, 0.02, z, x, 0.2 + r() * 0.7, z); }
+    wb.build(wire);
+  }
+  // ---- doorway reveals (seen from inside and outside)
+  const rv = s === 3 ? M.nbReveal3 : M.nbReveal1;
+  quad(b, rv, 0.2, 2.4, -1.333, 1.2, -0.1, Math.PI / 2, 0, { world: 1.2 });
+  quad(b, rv, 0.2, 2.4, 1.333, 1.2, -0.1, -Math.PI / 2, 0, { world: 1.2 });
+  quad(b, rv, 2.666, 0.2, 0, 2.4, -0.1, 0, Math.PI / 2, { world: 1.2 });
+  // ---- stage 1: the program's clean glowing outline outside
+  if (s === 1) {
+    const e = 0.05, top = 3.4 - e / 2;
+    for (const [x, z] of [[-4.2, -0.2], [4.2, -0.2], [-4.2, 10.2], [4.2, 10.2]]) box(b, M.nbEdge, x, 0, z, e, 3.4, e, { uv: false });
+    box(b, M.nbEdge, 0, top, -0.2, 8.4, e, e, { uv: false });
+    box(b, M.nbEdge, 0, top, 10.2, 8.4, e, e, { uv: false });
+    box(b, M.nbEdge, -4.2, top, 5, e, e, 10.4, { uv: false });
+    box(b, M.nbEdge, 4.2, top, 5, e, e, 10.4, { uv: false });
+    frame(b, M.nbEdge, 0, 1.2, -0.215, 2.666, 2.4, 0, 0.04, 0.02);
+  }
+}
+
+function nbShell(sb) {
+  const m = M.shell1, o = { world: 1.3, seg: 2 };
+  quad(sb, m, 2.867, 3.4, -2.7665, 1.7, -0.2, Math.PI, 0, o);
+  quad(sb, m, 2.867, 3.4, 2.7665, 1.7, -0.2, Math.PI, 0, o);
+  quad(sb, m, 2.666, 1.0, 0, 2.9, -0.2, Math.PI, 0, o);
+  quad(sb, m, 10.4, 3.4, -4.2, 1.7, 5, -Math.PI / 2, 0, o);
+  quad(sb, m, 10.4, 3.4, 4.2, 1.7, 5, Math.PI / 2, 0, o);
+  quad(sb, m, 8.4, 3.4, 0, 1.7, 10.2, 0, 0, o);
+  quad(sb, m, 8.4, 10.4, 0, 3.4, 5, 0, -Math.PI / 2, o);
+}
+
+function nbGear(b) {
+  // drone (middle shelf, eye level)
+  const dx = -3.68, dy = 1.36, dz = 4.35, S = 1.35;
+  box(b, M.gearDark, dx, dy, dz, 0.28 * S, 0.08 * S, 0.28 * S, { uv: false });
+  for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+    rod(b, M.gearDark, dx, dy + 0.06 * S, dz, dx + sx * 0.2 * S, dy + 0.06 * S, dz + sz * 0.2 * S, 0.015, 4);
+    const rot = new THREE.CylinderGeometry(0.1 * S, 0.1 * S, 0.012, 10); rot.translate(dx + sx * 0.2 * S, dy + 0.09 * S, dz + sz * 0.2 * S); b.add(rot, M.gearMid);
+  }
+  const cam = new THREE.SphereGeometry(0.05, 6, 4); cam.translate(dx + 0.15, dy, dz); b.add(cam, M.gearMid);
+  // scanner (middle shelf), screen faces the room (+x)
+  box(b, M.gearDark, -3.7, 1.36, 6.15, 0.3, 0.26, 0.46, { uv: false });
+  quad(b, M.screen, 0.34, 0.16, -3.545, 1.5, 6.15, Math.PI / 2);
+  // tablet + case (top shelf)
+  box(b, M.gearMid, -3.72, 1.96, 4.6, 0.3, 0.1, 0.4, { uv: false });
+  quad(b, M.screen2, 0.26, 0.07, -3.565, 2.01, 4.6, Math.PI / 2);
+  box(b, M.gearDark, -3.72, 1.96, 6.1, 0.42, 0.3, 0.6, { uv: false });
+  // grappling launcher (lower shelf), barrel along z
+  const gy = 0.76;
+  rod(b, M.gearDark, -3.66, gy + 0.12, 4.3, -3.66, gy + 0.12, 5.4, 0.06, 8);
+  box(b, M.gearMid, -3.66, gy, 4.55, 0.08, 0.2, 0.12, { uv: false });
+  box(b, M.gearAccent, -3.66, gy + 0.07, 4.95, 0.14, 0.11, 0.34, { uv: false });
+  for (const a of [0.3, 2.4, 4.5]) rod(b, M.gearMid, -3.66, gy + 0.12, 5.4, -3.66 + Math.cos(a) * 0.13, gy + 0.12 + Math.sin(a) * 0.13, 5.58, 0.018, 4);
+  box(b, M.gearDark, -3.72, gy, 6.3, 0.42, 0.26, 0.55, { uv: false });
+  // cases (bottom shelf)
+  box(b, M.gearMid, -3.72, 0.12, 4.1, 0.45, 0.32, 0.7, { uv: false });
+  box(b, M.gearDark, -3.72, 0.12, 6.1, 0.45, 0.26, 0.6, { uv: false });
+}
+// ------------------------------------------------------------------ ground, КПП
+function lawn(b, x0, x1, z0, z1) {
+  const w = x1 - x0, d = z1 - z0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+  quad(b, M.lawn, w, d, cx, 0.1, cz, 0, -Math.PI / 2, { world: 2.5, seg: 3 });
+  addCol(x0, -1, z0, x1, 0.1, z1);
+  box(b, M.concreteDark, cx, 0, z0, w + 0.2, 0.16, 0.2, { col: true, uvs: 1 });
+  box(b, M.concreteDark, cx, 0, z1, w + 0.2, 0.16, 0.2, { col: true, uvs: 1 });
+  box(b, M.concreteDark, x0, 0, cz, 0.2, 0.16, d, { col: true, uvs: 1 });
+  box(b, M.concreteDark, x1, 0, cz, 0.2, 0.16, d, { col: true, uvs: 1 });
+}
+function buildGround(b) {
+  quad(b, M.asphalt, 120, 150, 0, 0, -45, 0, -Math.PI / 2, { world: 3, seg: 3 });
+  lawn(b, -20, -5, -66, -22);
+  lawn(b, 5, 12, -66, -22);
+  quad(b, M.lawn, 30, 28, -19.5, 0.01, 1, 0, -Math.PI / 2, { world: 2.5, seg: 3 });
+  quad(b, M.lawn, 30, 28, 19.5, 0.01, 1, 0, -Math.PI / 2, { world: 2.5, seg: 3 });
+  box(b, M.concreteDark, -3.9, 0, -6.6, 0.2, 0.14, 12.8, { col: true, uvs: 1 });
+  box(b, M.concreteDark, 3.9, 0, -6.6, 0.2, 0.14, 12.8, { col: true, uvs: 1 });
+  for (const [x, z, sx, sz, a] of [[2.2, -30, 1.6, 0.9, 0.3], [-2.4, -45, 2.2, 1.1, -0.4], [1.4, -58, 1.3, 0.8, 1.1], [7.5, -70, 2.4, 1.2, 0.2],
+    [-8, -17.5, 1.8, 0.9, 0.7], [12.8, -26, 1.2, 0.7, -0.3], [-1.2, -6, 1.4, 0.7, 0.5], [13.5, -50, 1.6, 0.9, 0.1]]) {
+    const g = new THREE.CircleGeometry(1, 10); g.scale(sx, sz, 1); place(g, x, 0.012, z, a, -Math.PI / 2); b.add(g, M.puddle);
+  }
+}
+
+function fence(b, lb, x0, x1, z) {
+  const pw = 2.5, ph = 2.3;
+  for (let x = x0; x < x1 - 0.01; x += pw) {
+    const w = Math.min(pw, x1 - x);
+    box(b, M.fence, x + w / 2, 0, z, w, ph, 0.12, { uv: false });
+    box(b, M.concreteDark, x, 0, z, 0.22, 2.55, 0.22, { uvs: 1 });
+    lb.seg(M.wire, x, 2.55, z, x, 3.02, z);
+    lb.seg(M.wire, x, 2.7, z, x, 2.98, z + 0.28);
+    lb.seg(M.wire, x, 2.7, z, x, 2.98, z - 0.28);
+  }
+  box(b, M.concreteDark, x1, 0, z, 0.22, 2.55, 0.22, { uvs: 1 });
+  const rr = 0.27, cy = 2.8, pitch = 0.34, n = Math.ceil((x1 - x0) / pitch * 10);   // concertina coil
+  let px = x0, py = cy, pz = z + rr;
+  for (let i = 1; i <= n; i++) {
+    const t = i / 10 * Math.PI * 2;
+    const nx = x0 + i / 10 * pitch, ny = cy + Math.sin(t) * rr, nz = z + Math.cos(t) * rr;
+    lb.seg(M.wire, px, py, pz, nx, ny, nz); px = nx; py = ny; pz = nz;
+  }
+  lb.seg(M.wire, x0, 2.62, z, x1, 2.62, z);
+  addCol(x0, 0, z - 0.12, x1, 3.1, z + 0.12);
+}
+
+function booth(b) {
+  const cx = -6, cz = -13.2, w = 2.4, d = 2.4, h = 2.6;
+  box(b, M.plasterOut, cx, 0, cz, w, h, d, { col: true, uvs: 1.5 });
+  box(b, M.metalDark, cx, h, cz, w + 0.5, 0.16, d + 0.5, { uvs: 1.5 });
+  quad(b, M.boothWin, 1.6, 0.95, cx + 0.1, 1.6, cz + d / 2 + 0.012, 0, 0);
+  frame(b, M.metalDark, cx + 0.1, 1.6, cz + d / 2 + 0.03, 1.6, 0.95, 0);
+  quad(b, M.boothWin, 1.6, 0.95, cx + w / 2 + 0.012, 1.6, cz - 0.1, Math.PI / 2, 0);
+  frame(b, M.metalDark, cx + w / 2 + 0.03, 1.6, cz - 0.1, 1.6, 0.95, Math.PI / 2);
+  quad(b, M.sign, 1.3, 0.32, cx + 0.1, 2.38, cz + d / 2 + 0.02, 0, 0);
+  quad(b, M.doorMetal, 0.8, 1.95, cx - w / 2 - 0.012, 0.975, cz + 0.3, -Math.PI / 2, 0);
+}
+
+function lampPost(b, x, z, dir, li) {
+  const pole = new THREE.CylinderGeometry(0.09, 0.14, 7.2, 6); pole.translate(x, 3.6, z); worldUV(pole, 1.5); b.add(pole, M.concrete);
+  addCol(x - 0.15, 0, z - 0.15, x + 0.15, 7.2, z + 0.15);
+  box(b, M.metalDark, x + dir * 0.75, 6.98, z, 1.5, 0.07, 0.07);
+  box(b, M.metalDark, x + dir * 1.45, 6.8, z, 0.62, 0.14, 0.3);
+  const lm = mat({ unlit: true, color: 0x000000, emissive: 0xffc070, fogMul: 0.5 });
+  quad(b, lm, 0.52, 0.22, x + dir * 1.45, 6.795, z, 0, Math.PI / 2);
+  L[li].mats.push([lm, 0.8]);
+}
+
+function buildKPP(b, lb) {
+  fence(b, lb, -48, -7.2, -14);
+  fence(b, lb, 5.6, 48, -14);
+  booth(b);
+  // striped boom barrier: pivot post, arm (jumpable), support fork
+  box(b, M.redPaint, -4.0, 0, -13.6, 0.3, 1.0, 0.3, { col: true, uvs: 1 });
+  box(b, M.metalDark, -4.0, 0.95, -13.6, 0.42, 0.18, 0.36, { uvs: 1 });
+  const arm = boxGeo(8.1, 0.09, 0.09); place(arm, 0.2, 1.04, -13.6); worldUV(arm, 1.0); b.add(arm, M.stripe);
+  addCol(-3.85, 0.95, -13.68, 4.25, 1.1, -13.52);
+  box(b, M.metalDark, 4.3, 0, -13.6, 0.08, 0.98, 0.08, { col: true });
+  box(b, M.metalDark, 4.3, 0.98, -13.6, 0.08, 0.08, 0.24);
+  lampPost(b, -4.6, -9.5, 1, LI.kpp);
+  // "no entry" road sign
+  box(b, M.metalDark, 4.9, 0, -12.6, 0.06, 2.0, 0.06, { col: true });
+  quad(b, M.noEntry, 0.62, 0.62, 4.9, 2.25, -12.565, 0, 0);
+  quad(b, M.signBack, 0.62, 0.62, 4.9, 2.25, -12.635, Math.PI, 0);
+  box(b, M.concreteDark, -9.6, 0, -12.4, 1.6, 0.6, 0.5, { col: true, uvs: 1 });
+  box(b, M.concreteDark, 8.6, 0, -12.5, 1.6, 0.6, 0.5, { col: true, uvs: 1, ry: 0.15 });
+}
+
+// ------------------------------------------------------------------ panel blocks (built in local space: facade along x, front faces +z)
+function facadeCells(b, m, x0, x1, y0, cols, rows, ch, z, facing, litFn, skipFn) {
+  const cw = (x1 - x0) / cols;
+  for (let row = 0; row < rows; row++) for (let c = 0; c < cols; c++) {
+    if (skipFn && skipFn(c, row)) continue;
+    const lit = litFn(c, row);
+    const g = new THREE.PlaneGeometry(cw, ch);
+    remapUV(g, lit ? 0.502 : 0.002, 0, lit ? 0.998 : 0.498, 1);
+    if (facing < 0) g.rotateY(Math.PI);
+    g.translate(x0 + cw * (c + 0.5), y0 + ch * (row + 0.5), z);
+    b.add(g, m);
+  }
+}
+function entrance(b, cx, cw, PL, CH, open, mC, mD, sky, r) {
+  const dw = 1.2, dh = 2.15, top = PL + CH, side = (cw - dw) / 2;
+  quad(b, mC, side, top, cx - dw / 2 - side / 2, top / 2, 0, 0, 0, { world: 2 });
+  quad(b, mC, side, top, cx + dw / 2 + side / 2, top / 2, 0, 0, 0, { world: 2 });
+  quad(b, mC, dw, top - dh, cx, dh + (top - dh) / 2, 0, 0, 0, { world: 2 });
+  quad(b, mD, 0.3, dh, cx - dw / 2, dh / 2, -0.15, Math.PI / 2, 0, { world: 1.5 });
+  quad(b, mD, 0.3, dh, cx + dw / 2, dh / 2, -0.15, -Math.PI / 2, 0, { world: 1.5 });
+  quad(b, mD, dw, 0.3, cx, dh, -0.15, 0, Math.PI / 2, { world: 1.5 });
+  if (!open) quad(b, sky ? mD : M.doorMetal, dw, dh, cx, dh / 2, -0.3, 0, 0);
+  box(b, mC, cx, 2.62, 0.62, 2.5, 0.14, 1.3, { uvs: 2 });
+  const bulb = new THREE.SphereGeometry(0.07, 6, 4); bulb.translate(cx, 2.52, 0.75);
+  b.add(bulb, sky ? M.bulbWarm : open ? M.entBulb : (r() < 0.5 ? M.bulbWarm : M.bulbOff));
+}
+function panelBlock(base, lb, o) {
+  const len = o.len, depth = o.depth, floors = o.floors;
+  const cols = Math.round(len / 3.2), cw = len / cols;
+  const PL = 0.5, CH = 2.8, H = PL + floors * CH, PAR = 0.6;
+  const mtx = new THREE.Matrix4().compose(new THREE.Vector3(o.x || 0, o.y || 0, o.z || 0),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(o.rx || 0, o.ry || 0, 0, 'YXZ')), _one);
+  const b = new XBatch(base, mtx);
+  const r = rng(o.seed || 1);
+  const mF = o.sky ? M.facadeSky : M.facade, mC = o.sky ? M.concreteSky : M.concrete, mD = o.sky ? M.concreteSkyDark : M.concreteDark;
+  const wire = o.sky ? M.wireSky : M.wire;
+  const ent = new Set(o.entrances || []);
+  const lit = o.lit ?? 0.22;
+  facadeCells(b, mF, -len / 2, len / 2, PL, cols, floors, CH, 0, 1, () => r() < lit, (c, row) => row === 0 && ent.has(c));
+  facadeCells(b, mF, -len / 2, len / 2, PL, cols, floors, CH, -depth, -1, () => r() < lit * 0.6, null);
+  for (let c = 0; c < cols; c++) if (!ent.has(c)) box(b, mD, -len / 2 + cw * (c + 0.5), 0, -0.14, cw, PL, 0.3, { uvs: 2 });
+  box(b, mD, 0, 0, -depth + 0.14, len, PL, 0.3, { uvs: 2 });
+  quad(b, mC, depth, H, len / 2, H / 2, -depth / 2, Math.PI / 2, 0, { world: 2.4, seg: 3 });
+  quad(b, mC, depth, H, -len / 2, H / 2, -depth / 2, -Math.PI / 2, 0, { world: 2.4, seg: 3 });
+  quad(b, mD, len, depth, 0, H, -depth / 2, 0, -Math.PI / 2, { world: 3, seg: 4 });
+  box(b, mC, 0, H, -0.1, len, PAR, 0.2, { uvs: 2 });
+  box(b, mC, 0, H, -depth + 0.1, len, PAR, 0.2, { uvs: 2 });
+  box(b, mC, -len / 2 + 0.1, H, -depth / 2, 0.2, PAR, depth - 0.4, { uvs: 2 });
+  box(b, mC, len / 2 - 0.1, H, -depth / 2, 0.2, PAR, depth - 0.4, { uvs: 2 });
+  box(b, mC, -len * 0.22, H, -depth / 2, 3.4, 2.4, 3.4, { uvs: 2 });
+  if (floors > 5 || o.sky) box(b, mC, len * 0.22, H, -depth / 2, 3.4, 2.4, 3.4, { uvs: 2 });
+  for (let i = 0; i < 3; i++) {   // TV antennas
+    const ax = (r() - 0.5) * len * 0.8, az = -depth * (0.25 + r() * 0.5), ah = 2 + r() * 1.5;
+    lb.seg(wire, ax, H, az, ax, H + ah, az, mtx);
+    for (let k = 0; k < 3; k++) { const yy = H + ah - 0.3 - k * 0.35, hw = 0.6 - k * 0.12; lb.seg(wire, ax - hw, yy, az, ax + hw, yy, az, mtx); }
+  }
+  for (let c = 0; c < cols; c++) {   // balconies
+    if (c % 4 !== 1 || ent.has(c)) continue;
+    const cx = -len / 2 + cw * (c + 0.5);
+    for (let row = 1; row < floors; row++) {
+      const y = PL + row * CH;
+      box(b, mC, cx, y - 0.12, 0.55, cw * 0.86, 0.12, 1.1, { uvs: 2 });
+      box(b, mD, cx, y, 1.07, cw * 0.86, 1.0, 0.06, { uvs: 1.5 });
+      box(b, mD, cx - cw * 0.43 + 0.03, y, 0.55, 0.06, 1.0, 1.04, { uvs: 1.5 });
+      box(b, mD, cx + cw * 0.43 - 0.03, y, 0.55, 0.06, 1.0, 1.04, { uvs: 1.5 });
+    }
+  }
+  for (const c of ent) entrance(b, -len / 2 + cw * (c + 0.5), cw, PL, CH, c === o.enterable, mC, mD, o.sky, r);
+  return mtx;
+}
+function buildBlocks(b, lb) {
+  panelBlock(b, lb, { x: -24, z: -44, ry: Math.PI / 2, len: 48, depth: 12, floors: 9, entrances: [2, 7, 12], seed: 11, lit: 0.24 });
+  panelBlock(b, lb, { x: 0, z: -76, ry: 0, len: 48, depth: 12, floors: 5, entrances: [2, 7, 12], enterable: 7, seed: 23, lit: 0.2 });
+  panelBlock(b, lb, { x: 30, z: -44, ry: -Math.PI / 2, len: 48, depth: 12, floors: 9, entrances: [3, 11], seed: 37, lit: 0.22 });
+  addCol(-36, 0, -68, -24, 30, -20);
+  addCol(30, 0, -68, 42, 30, -20);
+  // block B is hollow around the stairwell (x -1.4..1.4, z -81.9..-76.3) with a 1.2 m doorway
+  addCol(-24, 0, -88, -1.4, 17, -76); addCol(1.4, 0, -88, 24, 17, -76); addCol(-1.4, 0, -88, 1.4, 17, -81.9);
+  addCol(-1.4, 0, -76.3, -0.6, 17, -76); addCol(0.6, 0, -76.3, 1.4, 17, -76); addCol(-0.6, 2.15, -76.3, 0.6, 17, -76);
+  // invisible world bounds
+  addCol(-25, -1, -95, -24, 40, 20);
+  addCol(30, -1, -95, 31, 40, -14);
+  addCol(24, -1, -14.2, 25, 40, 20);
+  addCol(-25, -1, 16, 25, 40, 17);
+  addCol(-25, -1, -96, 31, 40, -88);
+}
+// ------------------------------------------------------------------ garages (climbable, cyan roof edges), playground, trees
+function edge(b, x0, y0, z0, x1, y1, z1, t = 0.07) {
+  const dx = x1 - x0, dz = z1 - z0, len = Math.hypot(dx, dz), alongX = Math.abs(dx) > Math.abs(dz);
+  const g = new THREE.BoxGeometry(alongX ? len : t, t, alongX ? t : len);
+  g.translate((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+  b.add(g, M.cyan);
+}
+function crate(b, x, z, s, h) {
+  for (let y = 0; y < h - 0.01;) { const ch = Math.min(s, h - y); box(b, M.crate, x, y, z, s, ch, s, { uv: false }); y += ch; }
+  addCol(x - s / 2, 0, z - s / 2, x + s / 2, h, z + s / 2, true);
+  const e = s / 2 + 0.02, yt = h - 0.02;
+  edge(b, x - e, yt, z - e, x + e, yt, z - e, 0.05); edge(b, x - e, yt, z + e, x + e, yt, z + e, 0.05);
+  edge(b, x - e, yt, z - e, x - e, yt, z + e, 0.05); edge(b, x + e, yt, z - e, x + e, yt, z + e, 0.05);
+}
+function buildGarages(b) {
+  for (const [z0, z1] of [[-46, -30], [-63.6, -47.6]]) {
+    const len = z1 - z0, cz = (z0 + z1) / 2;
+    box(b, M.concrete, 19, 0, cz, 6, 2.5, len, { uvs: 2 });
+    box(b, M.roof, 18.925, 2.5, cz, 6.45, 0.15, len + 0.3, { uvs: 3 });
+    addCol(15.7, 0, z0 - 0.15, 22.15, 2.65, z1 + 0.15, true);
+    const n = Math.round(len / 3.2);
+    for (let i = 0; i < n; i++) {
+      const gm = [M.garage, M.garage2, M.garage3][(i * 7 + Math.round(-z0)) % 3];
+      quad(b, gm, 2.6, 2.15, 15.99, 1.075, z1 - 3.2 * (i + 0.5), -Math.PI / 2, 0);
+    }
+    const y = 2.66, x0 = 15.66, x1 = 22.19, za = z0 - 0.19, zb = z1 + 0.19;
+    edge(b, x0, y, za, x0, y, zb); edge(b, x1, y, za, x1, y, zb); edge(b, x0, y, za, x1, y, za); edge(b, x0, y, zb, x1, y, zb);
+  }
+  crate(b, 14.6, -33.0, 0.9, 0.9);
+  crate(b, 15.15, -34.25, 1.0, 1.75);
+  box(b, M.metalDark, 15.8, 2.34, -39.8, 0.3, 0.04, 0.04);
+  const g = new THREE.SphereGeometry(0.06, 6, 4); g.translate(15.55, 2.27, -39.8); b.add(g, M.garageBulb);
+  // rubbish containers in the far corner
+  for (const x of [19.5, 21.4]) box(b, M.metalDark, x, 0, -71.5, 1.6, 1.15, 1.0, { col: true, uvs: 1.2, ry: x > 20 ? 0.12 : 0 });
+}
+
+let swingSeat = null;
+function bench(b, x, z) {
+  for (const oz of [-0.75, 0.75]) box(b, M.concreteDark, x, 0, z + oz, 0.45, 0.42, 0.12, { uvs: 1 });
+  for (const ox of [-0.12, 0.02, 0.16]) box(b, M.wood, x + ox, 0.42, z, 0.1, 0.05, 1.9, { uvs: 1 });
+  for (const oy of [0.62, 0.8]) box(b, M.wood, x - 0.2, oy, z, 0.05, 0.1, 1.9, { uvs: 1 });
+  addCol(x - 0.25, 0, z - 0.95, x + 0.25, 0.47, z + 0.95);
+}
+function buildPlayground(b) {
+  // arched climbing frame: painted rungs, the top rungs are grab points (cyan)
+  const cx = -12, cz = -40, R = 1.7, half = 0.5, N = 10, base = 0.1;
+  const paints = [M.paintY, M.paintB, M.paintG];
+  for (let i = 0; i <= N; i++) {
+    const a = Math.PI * i / N, x = cx + R * Math.cos(a), y = base + R * Math.sin(a);
+    rod(b, (i >= 4 && i <= 6) ? M.cyan : paints[i % 3], x, y, cz - half, x, y, cz + half, 0.035, 5);
+    addCol(x - 0.06, y - 0.06, cz - half, x + 0.06, y + 0.06, cz + half, true);
+    if (i < N) {
+      const a2 = Math.PI * (i + 1) / N, x2 = cx + R * Math.cos(a2), y2 = base + R * Math.sin(a2);
+      for (const zz of [cz - half, cz + half]) rod(b, M.paintR, x, y, zz, x2, y2, zz, 0.045, 5);
+    }
+  }
+  // sandbox with a mushroom shade
+  const sx = -15.5, sz = -50;
+  for (const [ox, oz, w, d] of [[0, -1.1, 2.4, 0.12], [0, 1.1, 2.4, 0.12], [-1.1, 0, 0.12, 2.1], [1.1, 0, 0.12, 2.1]]) box(b, M.wood, sx + ox, 0.1, sz + oz, w, 0.25, d, { uvs: 1, col: true });
+  quad(b, M.sand, 2.1, 2.1, sx, 0.25, sz, 0, -Math.PI / 2, { world: 1 });
+  rod(b, M.paintR, sx, 0.1, sz, sx, 2.05, sz, 0.05, 6);
+  addCol(sx - 0.07, 0, sz - 0.07, sx + 0.07, 2, sz + 0.07);
+  const cone = new THREE.ConeGeometry(1.05, 0.6, 9); cone.translate(sx, 2.3, sz); b.add(cone, M.mushroom);
+  // swing: static frame, the seat sways by itself
+  const wx = -8.6, wz = -51.5, top = 2.5;
+  for (const ox of [-1.1, 1.1]) {
+    rod(b, M.metalDark, wx + ox, 0.1, wz - 0.7, wx + ox, top, wz, 0.04, 5);
+    rod(b, M.metalDark, wx + ox, 0.1, wz + 0.7, wx + ox, top, wz, 0.04, 5);
+    addCol(wx + ox - 0.08, 0, wz - 0.75, wx + ox + 0.08, top, wz + 0.75);
+  }
+  rod(b, M.metalDark, wx - 1.15, top, wz, wx + 1.15, top, wz, 0.045, 5);
+  const seat = new THREE.Group(); seat.position.set(wx, top, wz); scene.add(seat);
+  const sb = new Batch();
+  box(sb, M.wood, 0, -1.75, 0, 0.6, 0.05, 0.28, { uvs: 1 });
+  rod(sb, M.metalDark, -0.27, 0, 0, -0.27, -1.72, 0, 0.012, 4);
+  rod(sb, M.metalDark, 0.27, 0, 0, 0.27, -1.72, 0, 0.012, 4);
+  sb.build(seat);
+  swingSeat = seat;
+  bench(b, -5.5, -36); bench(b, -5.5, -54);
+}
+
+function birch(b, lb, x, z, h, seed, base) {
+  const r = rng(seed);
+  const trunk = new THREE.CylinderGeometry(0.06, 0.14, h, 6, 4);
+  const P = trunk.attributes.position, UV = trunk.attributes.uv;
+  const bx = (r() - 0.5) * 0.7, bz = (r() - 0.5) * 0.7;
+  for (let i = 0; i < P.count; i++) { const t = P.getY(i) / h + 0.5; P.setX(i, P.getX(i) + bx * t * t); P.setZ(i, P.getZ(i) + bz * t * t); }
+  for (let i = 0; i < UV.count; i++) UV.setY(i, UV.getY(i) * h / 2.2);
+  trunk.translate(x, base + h / 2, z);
+  b.add(trunk, M.birch);
+  addCol(x - 0.16, 0, z - 0.16, x + 0.16, h, z + 0.16);
+  for (let i = 0; i < 6; i++) {
+    const t = 0.38 + 0.55 * r(), y0 = base + h * t;
+    const ang = r() * Math.PI * 2, tilt = 0.45 + r() * 0.55, len = (1.0 + r() * 2.0) * (1.1 - t * 0.5);
+    const sx = x + bx * t * t, sz = z + bz * t * t;
+    const ex = sx + Math.cos(ang) * Math.sin(tilt) * len, ey = y0 + Math.cos(tilt) * len, ez = sz + Math.sin(ang) * Math.sin(tilt) * len;
+    rod(b, M.birch, sx, y0, sz, ex, ey, ez, 0.03, 4);
+    for (let k = 0; k < 8; k++) {
+      const f = 0.3 + 0.7 * r(), px = sx + (ex - sx) * f, py = y0 + (ey - y0) * f, pz = sz + (ez - sz) * f;
+      const a2 = ang + (r() - 0.5) * 2.4, l2 = 0.35 + r() * 0.9;
+      lb.seg(M.twig, px, py, pz, px + Math.cos(a2) * l2 * 0.8, py + (r() < 0.3 ? -0.25 : 0.2 + r() * 0.5) * l2, pz + Math.sin(a2) * l2 * 0.8);
+    }
+  }
+  const tx = x + bx, tz = z + bz, ty = base + h;
+  for (let k = 0; k < 10; k++) { const a = r() * Math.PI * 2, l = 0.6 + r() * 1.2; lb.seg(M.twig, tx, ty - 0.3 * r(), tz, tx + Math.cos(a) * l * 0.6, ty + l * 0.6, tz + Math.sin(a) * l * 0.6); }
+}
+function pine(b, x, z, s) {
+  const g = new THREE.CylinderGeometry(0.1 * s, 0.16 * s, 2.2 * s, 5); g.translate(x, 1.1 * s, z); b.add(g, M.pineTrunk);
+  for (const [rr, hh, yy] of [[1.9, 3.0, 1.9], [1.5, 2.6, 3.2], [1.05, 2.2, 4.4], [0.6, 1.6, 5.5]]) {
+    const c = new THREE.ConeGeometry(rr * s, hh * s, 7); c.translate(x, yy * s, z); b.add(c, M.pine);
+  }
+  addCol(x - 0.25, 0, z - 0.25, x + 0.25, 6 * s, z + 0.25);
+}
+function buildTrees(b, lb) {
+  const birches = [[-7.5, -26], [-18, -28.5], [-15.5, -35], [-7, -45.5], [-19, -44], [-17.5, -58], [-8, -62], [-12.5, -64.5],
+    [7, -27], [9.8, -36], [7.6, -47.5], [10.2, -56], [7.2, -64], [26, -72], [27.5, -80], [-21, -71]];
+  birches.forEach(([x, z], i) => {
+    const onLawn = ((x > -20 && x < -5) || (x > 5 && x < 12)) && z < -22 && z > -66;
+    birch(b, lb, x, z, 8 + (i * 37 % 5) * 0.6, 100 + i, onLawn ? 0.1 : 0);
+  });
+  const pines = [[-9, 4], [-12.5, -3], [-15, 9], [-19, 1], [-21, -8], [-17, 13], [9.5, 6], [12.5, -4], [15.5, 9.5], [19, 0], [21, -9], [17, 14], [-6.5, 13], [7, 13.5]];
+  pines.forEach(([x, z], i) => pine(b, x, z, 0.9 + (i * 53 % 7) * 0.08));
+}
+// ------------------------------------------------------------------ stairwell inside block B (Exit-8 style loop between floors)
+const ST = { X0: -1.4, X1: 1.4, ZF: -76.3, ZL: -78.0, ZM: -80.24, ZB: -81.9, FH: 2.8, NR: 8, RISE: 0.175, RUN: 0.28, GAP: 0.14, TOP: 13.8 };
+const stLoop = { extraDoor: null, mannequins: [] };
+function stepBox(b, x0, x1, z0, z1, top, solid) {
+  const tb = Math.min(top, 0.3);
+  box(b, M.stStep, (x0 + x1) / 2, top - tb, (z0 + z1) / 2, x1 - x0, tb, z1 - z0, { uvs: 0.7 });
+  if (solid && top - tb > 0.01) box(b, M.stWall, (x0 + x1) / 2, 0, (z0 + z1) / 2, x1 - x0, top - tb, z1 - z0, { uvs: 1.6 });
+  addCol(x0, solid ? 0 : top - 0.32, z0, x1, top, z1);
+}
+function slab(b, x0, x1, z0, z1, top, th) {
+  box(b, M.stPlaster, (x0 + x1) / 2, top - th, (z0 + z1) / 2, x1 - x0, th, z1 - z0, { uvs: 1.6 });
+  quad(b, M.stTiles, x1 - x0, z1 - z0, (x0 + x1) / 2, top + 0.003, (z0 + z1) / 2, 0, -Math.PI / 2, { world: 0.8 });
+  addCol(x0, top - th, z0, x1, top, z1);
+}
+function buildStairwell(b, lb) {
+  const { X0, X1, ZF, ZL, ZM, ZB, FH, NR, RISE, RUN, GAP, TOP } = ST;
+  const W = X1 - X0, D = ZF - ZB, zc = (ZF + ZB) / 2, wo = { world: 1.6, seg: 1.4 };
+  quad(b, M.stWall, D, TOP, X0, TOP / 2, zc, Math.PI / 2, 0, wo);
+  quad(b, M.stWall, D, TOP, X1, TOP / 2, zc, -Math.PI / 2, 0, wo);
+  quad(b, M.stWall, W, TOP, 0, TOP / 2, ZB, 0, 0, wo);
+  quad(b, M.stWall, 0.8, TOP, -1.0, TOP / 2, ZF, Math.PI, 0, wo);
+  quad(b, M.stWall, 0.8, TOP, 1.0, TOP / 2, ZF, Math.PI, 0, wo);
+  quad(b, M.stWall, 1.2, TOP - 2.15, 0, 2.15 + (TOP - 2.15) / 2, ZF, Math.PI, 0, wo);
+  quad(b, M.stPlaster, W, D, 0, TOP, zc, 0, Math.PI / 2, { world: 1.6 });
+  quad(b, M.stTiles, W, ZF - ZL, 0, 0.004, (ZF + ZL) / 2, 0, -Math.PI / 2, { world: 0.8 });
+  addCol(-0.2, 0, ZM, 0.2, TOP, ZL);   // railings: no crossing between the two flights
+  const rail = Math.atan2(NR * RISE, NR * RUN), railLen = Math.hypot(NR * RISE, NR * RUN);
+  const extra = new Batch();
+  for (let k = 0; k <= 4; k++) {
+    const y0 = k * FH;
+    if (k > 0) {
+      slab(b, X0, X1, ZL, ZF, y0, 0.2);
+      quad(b, M.aptDoor, 0.9, 2.05, X0 + 0.012, y0 + 1.025, -77.15, Math.PI / 2, 0);
+      frame(b, M.aptFrame, X0 + 0.02, y0 + 1.025, -77.15, 0.9, 2.05, Math.PI / 2, 0.06, 0.04);
+      quad(b, M.aptDoor2, 0.9, 2.05, X1 - 0.012, y0 + 1.025, -77.15, -Math.PI / 2, 0);
+      frame(b, M.aptFrame, X1 - 0.02, y0 + 1.025, -77.15, 0.9, 2.05, -Math.PI / 2, 0.06, 0.04);
+      quad(b, M.floorNum, 0.34, 0.34, 0, y0 + 1.85, ZF - 0.012, Math.PI, 0);   // every floor says "2"
+    }
+    lb.seg(M.wire, 0.45, y0 + 2.6, -77.15, 0.45, y0 + 2.38, -77.15);
+    const bulb = new THREE.SphereGeometry(0.05, 6, 4); bulb.translate(0.45, y0 + 2.33, -77.15); b.add(bulb, k < 4 ? M.stBulb : M.bulbOff);
+    if (k === 4) continue;
+    const ym = y0 + 1.4;
+    if (k === 0) { box(b, M.stWall, 0, 0, (ZB + ZM) / 2, W, ym - 0.2, ZM - ZB, { uvs: 1.6 }); addCol(X0, 0, ZB, X1, ym - 0.2, ZM); }
+    slab(b, X0, X1, ZB, ZM, ym, 0.2);
+    for (let j = 0; j < NR; j++) {
+      const za1 = ZL - RUN * j, zb0 = ZM + RUN * j;
+      stepBox(b, GAP, X1, za1 - RUN, za1, y0 + RISE * (j + 1), k === 0);
+      stepBox(b, X0, -GAP, zb0, zb0 + RUN, ym + RISE * (j + 1), k === 0);
+      box(b, M.stMetal, GAP + 0.03, y0 + RISE * (j + 1), za1 - RUN / 2, 0.025, 0.92, 0.025, { uvs: 1 });
+      box(b, M.stMetal, -GAP - 0.03, ym + RISE * (j + 1), zb0 + RUN / 2, 0.025, 0.92, 0.025, { uvs: 1 });
+    }
+    // worn handrails: grab highlight
+    const hA = new THREE.BoxGeometry(0.06, 0.05, railLen); place(hA, GAP + 0.03, y0 + 0.7 + 0.95, (ZL + ZM) / 2, 0, rail); b.add(hA, M.cyan);
+    const hB = new THREE.BoxGeometry(0.06, 0.05, railLen); place(hB, -GAP - 0.03, ym + 0.7 + 0.95, (ZL + ZM) / 2, 0, -rail); b.add(hB, M.cyan);
+    box(b, M.cyan, 0, ym + 0.93, ZM - 0.04, 2 * GAP + 0.12, 0.05, 0.06, { uv: false });
+    if (k > 0) box(b, M.cyan, 0, y0 + 0.93, ZL + 0.04, 2 * GAP + 0.12, 0.05, 0.06, { uv: false });
+    // mid-landing window and radiator
+    quad(b, M.stGlass, 1.1, 1.0, 0, ym + 1.45, ZB + 0.012, 0, 0);
+    frame(b, M.stWood, 0, ym + 1.45, ZB + 0.03, 1.1, 1.0, 0, 0.07, 0.06);
+    box(b, M.stWood, 0, ym + 0.95, ZB + 0.03, 0.05, 1.0, 0.05, { uvs: 1 });
+    box(b, M.radiator, 0, ym + 0.2, ZB + 0.07, 0.9, 0.5, 0.08, { uv: false });
+    // loop anomaly: a door where no door should be
+    quad(extra, M.aptDoor2, 0.9, 2.05, 0.85, ym + 1.025, ZB + 0.012, 0, 0);
+    frame(extra, M.aptFrame, 0.85, ym + 1.025, ZB + 0.02, 0.9, 2.05, 0, 0.06, 0.04);
+  }
+  box(b, M.mailbox, -0.78, 0.95, ZL + 0.11, 1.1, 0.8, 0.22, { uv: false });
+  for (const [nx, ny, nw, nh] of [[-1.1, 1.95, 0.21, 0.29], [-0.8, 2.0, 0.21, 0.15], [-0.52, 1.92, 0.15, 0.21]]) quad(b, M.paper, nw, nh, nx, ny, ZL + 0.012, 0, 0);
+  // entrance door leaf, left ajar outward
+  const leaf = new THREE.BoxGeometry(1.15, 2.1, 0.05);
+  place(leaf, 0.6 + Math.cos(Math.PI / 3) * 0.6, 1.05, -75.97 + Math.sin(Math.PI / 3) * 0.6, -Math.PI / 3);
+  b.add(leaf, M.doorMetal);
+  box(b, M.metalDark, -0.9, 1.3, -75.97, 0.14, 0.24, 0.05, { uvs: 0.5 });   // intercom
+  const g = new THREE.Group(); scene.add(g); extra.build(g); stLoop.extraDoor = g;
+}
+
+// ------------------------------------------------------------------ sky: gradient dome + upside-down panel blocks hanging in the fog
+const sky = { dome: null, blocks: [] };
+function buildSky() {
+  const skyMat = new THREE.ShaderMaterial({
+    uniforms: { uFogColor: shared.uFogColor },
+    vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = p.xyww; }`,
+    fragmentShader: `uniform vec3 uFogColor; varying vec3 vDir; void main(){ float h = clamp(vDir.y, 0.0, 1.0); gl_FragColor = vec4(mix(uFogColor, uFogColor * 0.42, smoothstep(0.02, 0.6, h)), 1.0); }`,
+    side: THREE.BackSide, depthWrite: false, depthTest: false,
+  });
+  sky.dome = new THREE.Mesh(new THREE.SphereGeometry(100, 16, 10), skyMat);
+  sky.dome.renderOrder = -10; sky.dome.frustumCulled = false; scene.add(sky.dome);
+  const defs = [
+    { x: -38, y: 70, z: -95, floors: 12, len: 44 },
+    { x: 22, y: 80, z: -115, floors: 14, len: 50 },
+    { x: 55, y: 62, z: -62, floors: 9, len: 36 },
+    { x: -62, y: 74, z: -40, floors: 12, len: 44 },
+    { x: 6, y: 100, z: -55, floors: 9, len: 40 },
+    { x: -8, y: 82, z: -140, floors: 16, len: 48 },
+  ];
+  defs.forEach((d, i) => {
+    const nx = 0 - d.x, nz = -35 - d.z, nl = Math.hypot(nx, nz);
+    const ry = Math.atan2(-nx / nl, -nz / nl) + (i % 2 ? 0.35 : -0.3);   // facade (local -z after the flip) roughly faces the yard
+    const grp = new THREE.Group(); grp.position.set(d.x, d.y, d.z); grp.rotation.y = ry; scene.add(grp);
+    const bb = new Batch(), lb = new LineBatch();
+    panelBlock(bb, lb, { rx: Math.PI, len: d.len, depth: 12, floors: d.floors, entrances: [2, 7], seed: 300 + i, lit: 0.3, sky: true });
+    bb.build(grp); lb.build(grp);
+    sky.blocks.push({ g: grp, y: d.y, ry, ph: i * 1.7 });
+  });
+}
+
+// ------------------------------------------------------------------ security entity: tall faceless mannequin with one red eye
+function makeMannequin() {
+  const root = new THREE.Group();
+  const hip = new THREE.Group(); hip.position.y = 1.32; root.add(hip);
+  const mk = (geo, parent, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, M.skin); m.position.set(x, y, z); parent.add(m); return m; };
+  mk(new THREE.BoxGeometry(0.36, 0.18, 0.2), hip);
+  const legGeo = new THREE.CylinderGeometry(0.065, 0.04, 1.28, 6); legGeo.translate(0, -0.64, 0);
+  const legL = new THREE.Group(); legL.position.set(-0.1, -0.06, 0); hip.add(legL); mk(legGeo, legL);
+  const legR = new THREE.Group(); legR.position.set(0.1, -0.06, 0); hip.add(legR); mk(legGeo, legR);
+  const torso = mk(new THREE.CylinderGeometry(0.23, 0.15, 0.78, 6), hip, 0, 0.47, 0); torso.scale.z = 0.6;
+  const armGeo = new THREE.CylinderGeometry(0.045, 0.03, 1.22, 6); armGeo.translate(0, -0.61, 0);
+  const armL = new THREE.Group(); armL.position.set(-0.28, 0.82, 0); armL.rotation.z = -0.06; hip.add(armL); mk(armGeo, armL);
+  const armR = new THREE.Group(); armR.position.set(0.28, 0.82, 0); armR.rotation.z = 0.06; hip.add(armR); mk(armGeo, armR);
+  mk(new THREE.CylinderGeometry(0.045, 0.055, 0.18, 6), hip, 0, 0.95, 0);
+  const head = new THREE.Group(); head.position.set(0, 1.08, 0); hip.add(head);
+  const skull = mk(new THREE.SphereGeometry(0.15, 8, 6), head, 0, 0.12, 0); skull.scale.set(0.95, 1.32, 1.05);
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 4), M.eye); eye.position.set(0, 0.15, 0.145); head.add(eye);
+  return { root, hip, legL, legR, armL, armR, head, eye, headYaw: 0, headPitch: 0 };
+}
+const WP = [[-4.4, -22], [-4.4, -66], [4.4, -70], [13.2, -64], [13.2, -26], [4.4, -20]];
+const ent = { m: null, wp: 1, pos: new THREE.Vector3(-4.4, 0, -24), yaw: Math.PI, phase: 0, poseT: 0, frozen: false };
+function buildEntity() {
+  ent.m = makeMannequin(); scene.add(ent.m.root);
+  for (const k of [1, 2]) {   // loop anomaly: it waits on the mid-landing
+    const s = makeMannequin();
+    s.root.position.set(-0.75, k * ST.FH + 1.4, -81.1);
+    s.root.visible = false;
+    scene.add(s.root); stLoop.mannequins.push(s);
+  }
+}
+// ------------------------------------------------------------------ state & HUD
+const state = { alarm: 0, stage: 1, ps1: PS1_Q !== '0', help: !HUD_OFF, loop: 0, started: false };
+const ALARM_NAMES = ['спокойно', 'красный', 'тьма'];
+const STAGE_NAMES = ['только что развёрнут', 'система начинает поглощать', 'почти поглощён'];
+const CAPTIONS = {
+  netbox: ['NetBox', 'база хакеров внутри системы · 1 2 3 — стадии поглощения'],
+  kpp: ['КПП', 'выход из NetBox — вход в закрытый город'],
+  yard: ['Двор', 'голубым подсвечено то, за что можно схватиться'],
+  stairs: ['Подъезд', 'поднимайтесь и замечайте, что изменилось'],
+};
+let capTimer = 0, toastTimer = 0, curZone = null;
+function showCaption(z) {
+  const c = CAPTIONS[z]; if (!c) return;
+  caption.querySelector('.t').textContent = c[0];
+  caption.querySelector('.s').textContent = c[1];
+  caption.classList.add('show'); capTimer = 4.5;
+}
+function showToast(text) { toast.textContent = text; toast.classList.add('show'); toastTimer = 2.4; }
+function updateHud() {
+  $('st-alarm').textContent = ALARM_NAMES[state.alarm];
+  $('st-stage').textContent = String(state.stage);
+  $('st-ps1').textContent = state.ps1 ? 'вкл' : 'выкл';
+  help.classList.toggle('hidden', !state.help);
+}
+function setAlarm(a, notify) { state.alarm = a; updateHud(); if (notify) showToast('Тревога: ' + ALARM_NAMES[a]); }
+function setStage(s, notify) {
+  state.stage = s;
+  nb.groups.forEach((g, i) => { g.visible = i + 1 === s; });
+  if (nb.shell) nb.shell.material = [M.shell1, M.shell2, M.shell3][s - 1];
+  updateHud();
+  if (notify) showToast(`NetBox, стадия ${s}: ${STAGE_NAMES[s - 1]}`);
+}
+function applyFilters() {
+  for (const t of ALL_TEX) {
+    t.magFilter = state.ps1 ? THREE.NearestFilter : THREE.LinearFilter;
+    t.minFilter = t.userData.mip ? (state.ps1 ? THREE.NearestMipmapNearestFilter : THREE.LinearMipmapLinearFilter) : (state.ps1 ? THREE.NearestFilter : THREE.LinearFilter);
+    t.needsUpdate = true;
+  }
+}
+function setPS1(on, notify) {
+  state.ps1 = on; shared.uPS1.value = on ? 1 : 0; applyFilters(); updateHud();
+  if (notify) showToast(on ? 'PS1-эффекты включены' : 'PS1-эффекты выключены — для сравнения');
+}
+function applyLoop() {
+  if (stLoop.extraDoor) stLoop.extraDoor.visible = state.loop === 2;
+  for (const s of stLoop.mannequins) s.root.visible = state.loop === 4;
+}
+function zoneOf(p) {
+  if (p.x > -4 && p.x < 4 && p.z > 0 && p.z < 10) return 'netbox';
+  if (p.x > -1.45 && p.x < 1.45 && p.z < -76.2 && p.z > -82) return 'stairs';
+  if (p.z > -14) return 'kpp';
+  return 'yard';
+}
+
+// ------------------------------------------------------------------ input
+const keys = Object.create(null);
+let locked = false, ready = false;
+addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.repeat || !ready) return;
+  switch (e.code) {
+    case 'KeyT': setAlarm((state.alarm + 1) % 3, true); break;
+    case 'Digit1': case 'Numpad1': setStage(1, true); break;
+    case 'Digit2': case 'Numpad2': setStage(2, true); break;
+    case 'Digit3': case 'Numpad3': setStage(3, true); break;
+    case 'KeyP': setPS1(!state.ps1, true); break;
+    case 'KeyH': state.help = !state.help; updateHud(); break;
+  }
+});
+addEventListener('keyup', (e) => { keys[e.code] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+document.addEventListener('mousemove', (e) => {
+  if (!locked) return;
+  player.yaw -= e.movementX * 0.0022;
+  player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - e.movementY * 0.0022));
+});
+function requestLock() {
+  if (!ready) return;
+  try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => {}); } catch (err) { /* browser refused; the overlay stays */ }
+}
+overlay.addEventListener('click', (e) => { if (e.target.closest('#exit')) return; requestLock(); });
+canvas.addEventListener('click', () => { if (!locked) requestLock(); });
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === canvas;
+  if (locked) {
+    overlay.classList.add('hidden');
+    if (!state.started) { state.started = true; curZone = null; }
+  } else {
+    $('go').textContent = 'Пауза — кликните, чтобы продолжить';
+    overlay.classList.remove('hidden');
+    for (const k in keys) keys[k] = false;
+  }
+});
+
+// ------------------------------------------------------------------ player: AABB vs box colliders, step-up, ground snap, mantle onto cyan ledges
+const R = 0.3, PH = 1.75, EYE = 1.62, STEP = 0.42, GRAV = 22, JUMP_V = 7.4, WALK = 3.4, RUN = 6.6;
+const player = { pos: new THREE.Vector3(1.6, 0, 8.8), vel: new THREE.Vector3(), yaw: 0.22, pitch: -0.06, grounded: true, bob: 0, bobAmt: 0, dip: 0, mantle: null, fov: 72, jumpHeld: false };
+function hitAt(x, y, z) {
+  for (const c of COLS) if (x + R > c.x0 && x - R < c.x1 && z + R > c.z0 && z - R < c.z1 && y + PH > c.y0 && y < c.y1) return c;
+  return null;
+}
+let blockGrab = null;
+function moveH(axis, amt) {
+  const p = player.pos;
+  p[axis] += amt;
+  for (const c of COLS) {
+    if (!(p.x + R > c.x0 && p.x - R < c.x1 && p.z + R > c.z0 && p.z - R < c.z1 && p.y + PH > c.y0 && p.y < c.y1)) continue;
+    const up = c.y1 - p.y;
+    if (up > 0 && up <= STEP && player.grounded && !hitAt(p.x, c.y1 + 0.001, p.z)) { p.y = c.y1 + 0.001; continue; }
+    if (c.grab) blockGrab = c;
+    if (axis === 'x') p.x = amt > 0 ? c.x0 - R - 1e-4 : c.x1 + R + 1e-4;
+    else p.z = amt > 0 ? c.z0 - R - 1e-4 : c.z1 + R + 1e-4;
+  }
+}
+function moveV(dt) {
+  const p = player.pos, v = player.vel, prevY = p.y;
+  p.y += v.y * dt;
+  let landed = false;
+  if (p.y <= 0) { p.y = 0; if (v.y <= 0) { v.y = 0; landed = true; } }
+  for (const c of COLS) {
+    if (!(p.x + R > c.x0 && p.x - R < c.x1 && p.z + R > c.z0 && p.z - R < c.z1 && p.y + PH > c.y0 && p.y < c.y1)) continue;
+    if (v.y <= 0 && prevY >= c.y1 - 0.05) { p.y = c.y1; v.y = 0; landed = true; }
+    else if (v.y > 0 && prevY + PH <= c.y0 + 0.05) { p.y = c.y0 - PH - 1e-4; v.y = 0; }
+    else if (c.y1 - p.y < 0.5) { p.y = c.y1; v.y = Math.max(0, v.y); landed = true; }
+  }
+  return landed;
+}
+function groundBelow(maxDrop) {
+  const p = player.pos; let best = p.y <= maxDrop ? 0 : -Infinity;
+  for (const c of COLS) {
+    if (!(p.x + R > c.x0 && p.x - R < c.x1 && p.z + R > c.z0 && p.z - R < c.z1)) continue;
+    if (c.y1 <= p.y + 0.01 && c.y1 >= p.y - maxDrop && c.y1 > best) best = c.y1;
+  }
+  return best;
+}
+function tryMantle(c, dx, dz) {
+  const p = player.pos, h = c.y1 - p.y;
+  if (h < 0.45 || h > 2.35 || Math.hypot(dx, dz) < 0.1) return;
+  const mx = Math.min(R, (c.x1 - c.x0) / 2), mz = Math.min(R, (c.z1 - c.z0) / 2);
+  const tx = Math.min(Math.max(p.x + dx * 0.75, c.x0 + mx), c.x1 - mx);
+  const tz = Math.min(Math.max(p.z + dz * 0.75, c.z0 + mz), c.z1 - mz);
+  const ty = c.y1 + 0.001;
+  if (hitAt(tx, ty, tz)) return;
+  player.mantle = { t: 0, dur: 0.25 + h * 0.1, from: p.clone(), to: new THREE.Vector3(tx, ty, tz) };
+  player.vel.set(0, 0, 0);
+}
+function updatePlayer(dt) {
+  const p = player.pos, v = player.vel;
+  if (player.mantle) {
+    const m = player.mantle; m.t += dt;
+    const f = Math.min(1, m.t / m.dur);
+    const fy = 1 - (1 - Math.min(1, f * 1.6)) ** 2, fxz = f < 0.45 ? 0 : (f - 0.45) / 0.55;
+    p.set(m.from.x + (m.to.x - m.from.x) * fxz, m.from.y + (m.to.y - m.from.y) * fy, m.from.z + (m.to.z - m.from.z) * fxz);
+    player.dip = Math.sin(f * Math.PI) * 0.12;
+    if (f >= 1) { player.mantle = null; player.grounded = true; v.set(0, 0, 0); }
+    return;
+  }
+  let fx = 0, fz = 0;
+  if (keys.KeyW || keys.ArrowUp) fz -= 1;
+  if (keys.KeyS || keys.ArrowDown) fz += 1;
+  if (keys.KeyA || keys.ArrowLeft) fx -= 1;
+  if (keys.KeyD || keys.ArrowRight) fx += 1;
+  const il = Math.hypot(fx, fz); if (il > 0) { fx /= il; fz /= il; }
+  const run = keys.ShiftLeft || keys.ShiftRight;
+  const sp = run ? RUN : WALK, s = Math.sin(player.yaw), c = Math.cos(player.yaw);
+  const wx = fx * c + fz * s, wz = -fx * s + fz * c;
+  const k = 1 - Math.exp(-(player.grounded ? 11 : 2.2) * dt);
+  v.x += (wx * sp - v.x) * k; v.z += (wz * sp - v.z) * k;
+  let jumped = false;
+  if (keys.Space && player.grounded && !player.jumpHeld) { v.y = JUMP_V; player.grounded = false; jumped = true; }
+  player.jumpHeld = !!keys.Space;
+  v.y -= GRAV * dt;
+  blockGrab = null;
+  const steps = Math.max(1, Math.ceil(Math.max(Math.abs(v.x), Math.abs(v.z)) * dt / 0.2));
+  for (let i = 0; i < steps; i++) { moveH('x', v.x * dt / steps); moveH('z', v.z * dt / steps); }
+  const wasGrounded = player.grounded, fallV = v.y;
+  let landed = moveV(dt);
+  if (!landed && wasGrounded && !jumped && v.y <= 0) { const gy = groundBelow(STEP); if (gy > -Infinity) { p.y = gy; v.y = 0; landed = true; } }
+  if (landed && !wasGrounded && fallV < -5) player.dip = Math.min(0.3, -fallV * 0.022);
+  player.grounded = landed;
+  if (blockGrab && (keys.Space || !player.grounded) && il > 0) tryMantle(blockGrab, wx, wz);
+  // the entity is solid (but harmless)
+  const ex = p.x - ent.pos.x, ez = p.z - ent.pos.z, ed = Math.hypot(ex, ez);
+  if (ed < 0.55 && ed > 1e-4 && p.y < 2.5) { p.x = ent.pos.x + ex / ed * 0.55; p.z = ent.pos.z + ez / ed * 0.55; }
+  // stairwell loop: stepping onto the 3rd-floor landing silently drops you one floor, with one detail changed
+  if (p.x > ST.X0 && p.x < ST.X1 && p.z > ST.ZL + 0.05 && p.z < ST.ZF && p.y > 2 * ST.FH - 0.05 && p.y < 2 * ST.FH + 1.6) {
+    p.y -= ST.FH;
+    state.loop = (state.loop + 1) % 5;
+    applyLoop();
+  }
+  const hs = Math.hypot(v.x, v.z);
+  if (player.grounded && hs > 0.5) { player.bob += dt * hs * 2.0; player.bobAmt += (1 - player.bobAmt) * Math.min(1, dt * 8); }
+  else player.bobAmt += (0 - player.bobAmt) * Math.min(1, dt * 6);
+  player.dip *= Math.exp(-dt * 7);
+  player.fov += ((run && hs > 4 ? 78 : 72) - player.fov) * Math.min(1, dt * 5);
+}
+function updateCamera() {
+  const p = player.pos;
+  camera.position.set(p.x, p.y + EYE + Math.sin(player.bob * 2) * 0.035 * player.bobAmt - player.dip, p.z);
+  camera.rotation.set(player.pitch, player.yaw, Math.sin(player.bob) * 0.006 * player.bobAmt);
+  if (Math.abs(camera.fov - player.fov) > 0.01) { camera.fov = player.fov; camera.updateProjectionMatrix(); }
+}
+
+// ------------------------------------------------------------------ entity behaviour: patrol, stop and stare, head follows you
+const _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+function turnTo(a, b, step) { const d = Math.atan2(Math.sin(b - a), Math.cos(b - a)); return a + Math.max(-step, Math.min(step, d)); }
+function trackHead(m, bodyYaw, rate) {
+  const hp = m.head.getWorldPosition(_v3);
+  const dx = camera.position.x - hp.x, dy = camera.position.y - hp.y, dz = camera.position.z - hp.z, dist = Math.hypot(dx, dz);
+  let rel = Math.atan2(dx, dz) - bodyYaw; rel = Math.atan2(Math.sin(rel), Math.cos(rel));
+  const on = dist < 32;
+  m.headYaw += ((on ? THREE.MathUtils.clamp(rel, -1.9, 1.9) : 0) - m.headYaw) * rate;
+  m.headPitch += ((on ? THREE.MathUtils.clamp(Math.atan2(dy, dist), -0.6, 0.5) : 0) - m.headPitch) * rate;
+  m.head.rotation.set(-m.headPitch, m.headYaw, 0, 'YXZ');
+}
+function updateEntity(dt) {
+  const m = ent.m, p = ent.pos;
+  let moving = false;
+  if (!ent.frozen) {
+    const dxp = player.pos.x - p.x, dzp = player.pos.z - p.z;
+    if (Math.hypot(dxp, dzp) < 6.5 && player.pos.y < 3) ent.yaw = turnTo(ent.yaw, Math.atan2(dxp, dzp), dt * 1.2);
+    else {
+      const [tx, tz] = WP[ent.wp], dx = tx - p.x, dz = tz - p.z;
+      if (Math.hypot(dx, dz) < 0.6) ent.wp = (ent.wp + 1) % WP.length;
+      else {
+        ent.yaw = turnTo(ent.yaw, Math.atan2(dx, dz), dt * 1.6);
+        p.x += Math.sin(ent.yaw) * 1.05 * dt; p.z += Math.cos(ent.yaw) * 1.05 * dt;
+        moving = true;
+      }
+    }
+  }
+  m.root.position.copy(p); m.root.rotation.y = ent.yaw;
+  ent.poseT += dt;
+  if (ent.poseT > 0.11) {   // stop-motion pose updates (~9 fps) feel subtly wrong
+    ent.poseT = 0;
+    if (moving) ent.phase += 0.46;
+    const sw = moving ? Math.sin(ent.phase) : 0;
+    m.legL.rotation.x = sw * 0.42; m.legR.rotation.x = -sw * 0.42;
+    m.armL.rotation.x = -sw * 0.16; m.armR.rotation.x = sw * 0.16;
+    m.hip.position.y = 1.32 + (moving ? Math.abs(Math.cos(ent.phase)) * 0.035 : 0);
+    m.root.updateMatrixWorld(true);
+    trackHead(m, ent.yaw, 0.5);
+    for (const s of stLoop.mannequins) if (s.root.visible) { s.root.updateMatrixWorld(true); trackHead(s, 0, 0.5); }
+  }
+  m.root.updateMatrixWorld(true);
+  m.eye.getWorldPosition(L[LI.eye].p);
+  L[LI.eye].p.add(_v2.set(Math.sin(ent.yaw + m.headYaw) * 0.25, 0, Math.cos(ent.yaw + m.headYaw) * 0.25));
+  const s1 = stLoop.mannequins[0];
+  if (s1 && s1.root.visible) { s1.root.updateMatrixWorld(true); s1.eye.getWorldPosition(L[LI.eye2].p); L[LI.eye2].p.z += 0.25; }
+  else L[LI.eye2].p.set(0, -50, 0);
+}
+
+// ------------------------------------------------------------------ alarm environment + animated lights
+const ENV = [
+  { fog: [0.31, 0.33, 0.39], dens: 0.018, sky: [0.42, 0.44, 0.52], gnd: [0.15, 0.15, 0.16], win: 1.0, tint: [1, 1, 1] },
+  { fog: [0.25, 0.035, 0.03], dens: 0.021, sky: [0.42, 0.09, 0.07], gnd: [0.13, 0.025, 0.02], win: 0.85, tint: [1.0, 0.5, 0.42] },
+  { fog: [0.008, 0.008, 0.011], dens: 0.04, sky: [0.022, 0.022, 0.03], gnd: [0.008, 0.008, 0.01], win: 0.0, tint: [1, 1, 1] },
+];
+const env = { fog: new THREE.Color(0.29, 0.31, 0.36), sky: new THREE.Color(), gnd: new THREE.Color(), dens: 0.018, win: 1, tint: new THREE.Color(1, 1, 1) };
+const _t = new THREE.Color(), _c = new THREE.Color(), _c2 = new THREE.Color(), RED = new THREE.Color(1.0, 0.25, 0.2);
+function updateEnv(dt, t, snap) {
+  const E = ENV[state.alarm], k = snap ? 1 : 1 - Math.exp(-dt * 3);
+  env.fog.lerp(_t.setRGB(...E.fog), k); env.sky.lerp(_t.setRGB(...E.sky), k); env.gnd.lerp(_t.setRGB(...E.gnd), k);
+  env.tint.lerp(_t.setRGB(...E.tint), k);
+  env.dens += (E.dens - env.dens) * k; env.win += (E.win - env.win) * k;
+  const pulse = state.alarm === 1 ? 0.78 + 0.22 * Math.sin(t * 4.2) : 1;
+  shared.uFogColor.value.copy(env.fog).multiplyScalar(state.alarm === 1 ? 0.85 + 0.15 * Math.sin(t * 4.2) : 1);
+  shared.uFogDensity.value = env.dens;
+  shared.uAmbSky.value.copy(env.sky).multiplyScalar(pulse);
+  shared.uAmbGround.value.copy(env.gnd).multiplyScalar(pulse);
+  shared.uWinPower.value = env.win;
+  shared.uWinTint.value.copy(env.tint);
+  M.facadeSky.uniforms.uWinPower.value = Math.max(env.win, 0.65);
+  M.puddle.uniforms.uEmissive.value.copy(shared.uFogColor.value).multiplyScalar(0.32);
+  shared.uFlash.value = state.alarm === 2 ? 1 : 0;
+  shared.uFlashPos.value.copy(camera.position);
+  camera.getWorldDirection(shared.uFlashDir.value);
+}
+function lightColor(i, l, t, out) {
+  out.copy(l.c);
+  const a = state.alarm, pulse = 0.5 + 0.5 * Math.sin(t * 4.2);
+  switch (l.kind) {
+    case 'nb0':
+      if (state.stage === 3) out.setScalar(0);
+      else if (state.stage === 2) out.multiplyScalar(hash1(Math.floor(t * 9)) < 0.05 ? 0.35 : 0.85);
+      break;
+    case 'nb1':
+      if (state.stage === 2) out.setRGB(1.5, 1.12, 0.62);
+      if (state.stage === 3) out.setRGB(1.55, 0.42, 0.3).multiplyScalar(flick(t, 3, 0.1));
+      break;
+    case 'pad': if (state.stage === 3) out.multiplyScalar(0.55 + 0.45 * flick(t, 5, 0.2)); break;
+    case 'spill': if (state.stage === 2) out.setRGB(0.6, 0.55, 0.42); else if (state.stage === 3) out.setRGB(0.55, 0.16, 0.1); break;
+    case 'street': if (l.flick) out.multiplyScalar(flick(t, i)); break;
+    case 'stbulb': if (state.loop === 3) out.setRGB(1.4, 0.12, 0.06).multiplyScalar(flick(t, i, 0.25)); break;
+    case 'eye': case 'eye2': out.multiplyScalar(a === 0 ? 0.7 : a === 1 ? 1.0 : 1.5); return out;
+  }
+  if (l.kind === 'pad') return out;
+  if (a === 1) {
+    if (l.kind === 'street') out.setRGB(1.6, 0.16, 0.1).multiplyScalar(0.45 + 0.55 * pulse);
+    else out.multiply(RED).multiplyScalar(0.8 + 0.2 * pulse);
+  } else if (a === 2) out.setScalar(0);
+  return out;
+}
+function updateLights(t) {
+  for (let i = 0; i < NL; i++) {
+    const l = L[i];
+    if (!l) { shared.uLC.value[i].set(0, 0, 0, 0); continue; }
+    lightColor(i, l, t, _c);
+    shared.uLP.value[i].set(l.p.x, l.p.y, l.p.z, l.r);
+    shared.uLC.value[i].set(_c.r, _c.g, _c.b, l.z);
+    for (const [m, k, kind] of l.mats) {
+      if (kind === 'color') m.uniforms.uColor.value.setRGB(_c.r / l.c.r, _c.g / l.c.g, _c.b / l.c.b).multiplyScalar(k / 0.7);
+      else m.uniforms.uEmissive.value.copy(_c).multiplyScalar(k);
+    }
+  }
+  const a = state.alarm, pulse = 0.5 + 0.5 * Math.sin(t * 4.2);
+  const tint = a === 0 ? _c2.setRGB(1, 1, 1) : a === 1 ? _c2.setRGB(1, 0.22, 0.16).multiplyScalar(0.6 + 0.4 * pulse) : _c2.setRGB(0, 0, 0);
+  M.bulbWarm.uniforms.uEmissive.value.setRGB(1.0, 0.86, 0.55).multiply(tint);
+  M.sign.uniforms.uColor.value.setRGB(0.72, 0.72, 0.72).multiply(tint);
+  M.nbEdge.uniforms.uEmissive.value.setRGB(0.72, 0.83, 0.88).multiplyScalar(a === 2 ? 0.25 : 1);
+  M.nbStrip3.uniforms.uEmissive.value.setRGB(1.0, 0.16, 0.1).multiplyScalar(flick(t, 9, 0.3) * (a === 2 ? 0.4 : 1));
+  if (state.loop === 1) M.stGlass.uniforms.uColor.value.setRGB(0.95, 0.08, 0.04);
+  else M.stGlass.uniforms.uColor.value.setRGB(...[[0.11, 0.13, 0.18], [0.3, 0.04, 0.03], [0.015, 0.015, 0.02]][a]);
+  M.eye.uniforms.uEmissive.value.setRGB(1.0, 0.16, 0.08).multiplyScalar(a === 0 ? 0.9 : 1.3);
+}
+function animateMisc(dt, t) {
+  if (swingSeat) swingSeat.rotation.x = Math.sin(t * 1.25) * 0.32;
+  for (const s of sky.blocks) { s.g.position.y = s.y + Math.sin(t * 0.12 + s.ph) * 1.6; s.g.rotation.y = s.ry + Math.sin(t * 0.05 + s.ph) * 0.05; }
+  if (nb.wire) { const gl = hash1(Math.floor(t * 8)) < 0.18; nb.wire.position.set(gl ? (hash1(t) - 0.5) * 0.12 : 0, 0, gl ? (hash1(t + 1) - 0.5) * 0.12 : 0); }
+  if (sky.dome) sky.dome.position.copy(camera.position);
+}
+
+// ------------------------------------------------------------------ render loop, debug views, boot
+function render() {
+  if (state.ps1) {
+    renderer.setRenderTarget(rt); renderer.render(scene, camera);
+    renderer.setRenderTarget(null); renderer.render(postScene, postCam);
+  } else { renderer.setRenderTarget(null); renderer.render(scene, camera); }
+}
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  const lw = Math.max(240, Math.min(720, Math.round(LOW_H * w / h)));
+  rt.setSize(lw, LOW_H);
+  postMat.uniforms.uRes.value.set(lw, LOW_H);
+  shared.uSnap.value.set(lw * 0.5, LOW_H * 0.5);
+}
+addEventListener('resize', resize);
+
+let last = 0, clock = 0, frames = 0;
+function tick(now) {
+  requestAnimationFrame(tick);
+  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); last = now;
+  clock += dt; shared.uTime.value = clock;
+  if (locked) updatePlayer(dt);
+  updateCamera();
+  updateEntity(dt);
+  updateEnv(dt, clock, false);
+  updateLights(clock);
+  animateMisc(dt, clock);
+  if (state.started) { const z = zoneOf(player.pos); if (z !== curZone) { curZone = z; showCaption(z); } }
+  if (capTimer > 0 && (capTimer -= dt) <= 0) caption.classList.remove('show');
+  if (toastTimer > 0 && (toastTimer -= dt) <= 0) toast.classList.remove('show');
+  render();
+  if (++frames === 8) window.__mockupReady = true;
+}
+
+// ?view=netbox1|netbox2|netbox3|kpp|yard|stairs|garages|loop&alarm=calm|red|dark&ps1=0&hud=0
+const VIEWS = {
+  netbox1: { eye: [2.3, 1.62, 9.3], look: [-1.0, 1.0, 2.0], stage: 1 },
+  netbox2: { eye: [2.3, 1.62, 9.3], look: [-1.0, 1.0, 2.0], stage: 2 },
+  netbox3: { eye: [2.3, 1.62, 9.3], look: [-1.0, 1.0, 2.0], stage: 3 },
+  kpp: { eye: [1.6, 1.62, -1.6], look: [-1.8, 1.5, -14] },
+  yard: { eye: [0.5, 1.62, -16.5], look: [-2.5, 12, -60], ent: [-3.2, -33] },
+  stairs: { eye: [0.75, 1.62, -76.6], look: [0.6, 2.75, -80.6] },
+  garages: { eye: [9, 1.62, -26], look: [16, 2.2, -38] },
+  loop: { eye: [0.8, 5.12, -79.0], look: [-0.75, 5.7, -81.1], loop: 4 },
+};
+function applyView(name) {
+  const v = VIEWS[name]; if (!v) return false;
+  if (v.stage) setStage(v.stage);
+  if (v.loop) { state.loop = v.loop; applyLoop(); }
+  player.pos.set(v.eye[0], v.eye[1] - EYE, v.eye[2]);
+  const dx = v.look[0] - v.eye[0], dy = v.look[1] - v.eye[1], dz = v.look[2] - v.eye[2];
+  player.yaw = Math.atan2(-dx, -dz); player.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+  ent.frozen = true;
+  const ep = v.ent || [WP[0][0], WP[0][1] - 4];
+  ent.pos.set(ep[0], 0, ep[1]);
+  ent.yaw = Math.atan2(v.eye[0] - ep[0], v.eye[2] - ep[1]);
+  return true;
+}
+function buildWorld() {
+  makeCanvasTextures();
+  makeMaterials();
+  buildNetBox();
+  const b = new Batch(), lb = new LineBatch();
+  buildGround(b); buildKPP(b, lb); buildBlocks(b, lb); buildGarages(b); buildPlayground(b); buildTrees(b, lb);
+  lampPost(b, -5.6, -30, 1, LI.y1); lampPost(b, 5.6, -58, -1, LI.y2);
+  buildStairwell(b, lb);
+  b.build(scene); lb.build(scene);
+  buildSky(); buildEntity();
+}
+manager.onLoad = () => {
+  try { buildWorld(); }
+  catch (err) { console.error(err); $('go').textContent = 'Не удалось построить сцену'; return; }
+  ready = true;
+  setStage(1); setPS1(state.ps1, false); applyLoop(); resize();
+  if (ALARM_Q) setAlarm(Math.max(0, ['calm', 'red', 'dark'].indexOf(ALARM_Q)), false);
+  if (VIEW && applyView(VIEW)) {
+    overlay.classList.add('hidden'); state.started = true;
+    caption.style.transition = 'none'; curZone = zoneOf(player.pos); showCaption(curZone); capTimer = 1e9;
+  } else $('go').textContent = 'Кликните, чтобы начать';
+  updateCamera(); updateEnv(0, 0, true);
+  requestAnimationFrame((t) => { last = t; tick(t); });
+};
+// Debug handle (also used by the headless walk test): sim([[['KeyW', 'Space'], seconds], ...]) steps the player physics.
+window.__mockup = {
+  state, player, ent, COLS, renderer,
+  sim(seq) {
+    for (const [codes, secs] of seq) {
+      for (const k in keys) keys[k] = false;
+      for (const c of codes) keys[c] = true;
+      for (let i = 0, n = Math.round(secs * 60); i < n; i++) updatePlayer(1 / 60);
+    }
+    for (const k in keys) keys[k] = false;
+    return { x: +player.pos.x.toFixed(2), y: +player.pos.y.toFixed(2), z: +player.pos.z.toFixed(2), loop: state.loop };
+  },
+};
+</script>
+</body>
+</html>
